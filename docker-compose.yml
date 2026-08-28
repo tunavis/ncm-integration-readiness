@@ -1,0 +1,47 @@
+# The NCM, deployed alongside Company OS.
+#
+#   cp .env.example.docker .env    # then fill in the three secrets
+#   docker compose up -d --build
+#
+# It joins Company OS's existing network rather than creating its own, so the
+# two reach each other by service name over the internal network and the NCM
+# needs no publicly published port to be integrated.
+#
+# The one published port is bound to 127.0.0.1 deliberately. A browser on this
+# machine can open the NCM's own UI; nothing on the LAN can reach it, and the
+# default administrator account is therefore not exposed beyond this host.
+
+name: ncm
+
+services:
+  ncm:
+    build: .
+    image: ncm:latest
+    restart: unless-stopped
+    environment:
+      APP_NAME: Network Config Manager
+      SECRET_KEY: ${NCM_SECRET_KEY:?set NCM_SECRET_KEY in .env}
+      DEVICE_ENCRYPTION_KEY: ${NCM_DEVICE_ENCRYPTION_KEY:?set NCM_DEVICE_ENCRYPTION_KEY in .env}
+      DEFAULT_ADMIN_USERNAME: ${NCM_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${NCM_ADMIN_PASSWORD:?set NCM_ADMIN_PASSWORD in .env}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${NCM_TOKEN_MINUTES:-480}
+      # Identity-provider tokens stay off here. Company OS authenticates with a
+      # dedicated local `viewer` account; turning this on is a separate decision
+      # that needs the realm's issuer and this service's audience.
+      OIDC_ISSUER: ${NCM_OIDC_ISSUER:-}
+      OIDC_AUDIENCE: ${NCM_OIDC_AUDIENCE:-}
+    ports:
+      # Host-local only. See the note above.
+      - "127.0.0.1:${NCM_PUBLISHED_PORT:-8100}:8000"
+    volumes:
+      - ncm-data:/data
+
+volumes:
+  ncm-data:
+
+networks:
+  default:
+    # Company OS's network, created by its own compose project. External, so
+    # this file never owns or removes it.
+    name: ${NCM_NETWORK:-company-os_default}
+    external: true
