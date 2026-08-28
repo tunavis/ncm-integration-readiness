@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.core.database import init_db
 from app.api.auth import router as auth_router
+from app.api.health import router as health_router
 from app.api.devices import router as devices_router
 from app.api.backups import router as backups_router
 from app.api.schedules import router as schedules_router
@@ -26,6 +27,9 @@ def startup():
 def shutdown():
     stop_scheduler()
 
+# Unauthenticated and unprefixed: an orchestrator probing liveness should not
+# need a credential or know the API layout.
+app.include_router(health_router)
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(devices_router, prefix="/api/devices", tags=["Devices"])
 app.include_router(backups_router, prefix="/api/backups", tags=["Backups"])
