@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.api.deps import current_user, require_permission
@@ -14,8 +15,49 @@ from app.services.audit import record_audit
 router = APIRouter()
 
 @router.get("/", response_model=list[DeviceOut])
-def list_devices(db: Session = Depends(get_db), user=Depends(require_permission("devices.view"))):
-    return db.query(Device).order_by(Device.hostname).all()
+def list_devices(
+    limit: int | None = Query(default=None, ge=1, le=1000,
+                              description="Maximum devices to return. Unset returns all."),
+    offset: int = Query(default=0, ge=0, description="Devices to skip, for paging."),
+    site: str | None = Query(default=None, description="Exact site match."),
+    vendor: str | None = Query(default=None, description="Exact vendor match, case-insensitive."),
+    db: Session = Depends(get_db),
+    user=Depends(require_permission("devices.view")),
+):
+    """List devices, optionally filtered and paged.
+
+    Every parameter is optional and the default is the previous behaviour --
+    every device, ordered by hostname. That is deliberate: this endpoint has
+    existing callers, including a UI that renders whatever it is handed, and a
+    default page size would silently truncate them.
+    """
+    query = db.query(Device)
+    if site:
+        query = query.filter(Device.site == site)
+    if vendor:
+        # Case-insensitive on both sides. The API lowercases on write, but this
+        # column is read defensively as `device.vendor.lower()` everywhere in
+        # services/ -- so the codebase already assumes mixed case can be in
+        # there, and a filter that did not would silently miss those rows.
+        query = query.filter(func.lower(Device.vendor) == vendor.lower())
+    query = query.order_by(Device.hostname).offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    return query.all()
+
+
+@router.get("/{device_id}", response_model=DeviceOut)
+def get_device(device_id: int, db: Session = Depends(get_db),
+               user=Depends(require_permission("devices.view"))):
+    """One device by id.
+
+    Without this, reading one device costs the whole list -- which is what any
+    API client integrating against this has to do today.
+    """
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
+        raise HTTPException(404, "Device not found")
+    return device
 
 @router.post("/", response_model=DeviceOut)
 def create_device(data: DeviceCreate, db: Session = Depends(get_db),

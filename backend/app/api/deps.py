@@ -6,11 +6,22 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import ALGORITHM
 from app.core.rbac import has_permission
+from app.core import oidc
 from app.models.user import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 def current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    # An identity-provider token is tried first and only when it is one: tokens
+    # are told apart by their signing algorithm, so the local HS256 path below is
+    # reached unchanged by every credential that worked before this existed.
+    claims = oidc.claims_for(token)
+    if claims is not None:
+        user = oidc.resolve_user(db, claims)
+        if not user:
+            raise HTTPException(401, "User inactive or not found")
+        return user
+
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
         username = payload.get("sub")

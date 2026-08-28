@@ -1,0 +1,53 @@
+Network Config Manager
+======================
+
+This repository is a fork of:
+
+    https://github.com/justinthoms/network-config-manager
+
+forked at commit 72b5cf5, and originally written by Justin Thoms. The work is
+his; this fork exists to make the project integrable with Company OS, and the
+upstream project remains the source of everything that was already here.
+
+
+On the licence file
+-------------------
+
+Upstream's README states "MIT License" but the repository carries no LICENSE
+file. The MIT text was added here to record the licence the author already
+declared — not to assert any terms of our own over his work. The copyright line
+names Justin Thoms for that reason.
+
+If upstream adds its own LICENSE, that file is the authority and this fork
+should adopt it verbatim.
+
+
+Modifications in this fork
+--------------------------
+
+1. `GET /health` and `GET /ready` (`backend/app/api/health.py`).
+   Unauthenticated. `/health` deliberately checks nothing so it stays truthful
+   when a dependency is down; `/ready` checks the database. Offered upstream as
+   a courtesy pull request — this fork does not depend on it being accepted.
+
+2. Identity-provider tokens accepted alongside the local login
+   (`backend/app/core/oidc.py`, `backend/app/api/deps.py`).
+   Off unless `OIDC_ISSUER` and `OIDC_AUDIENCE` are both set. The local
+   username-and-password login is unchanged and remains the default path. A user
+   arriving on a valid token is provisioned as `viewer`; roles are granted by an
+   administrator here, never asserted by a claim in someone else's token.
+
+3. Pagination and filtering on `GET /api/devices/`, plus `GET /api/devices/{id}`
+   (`backend/app/api/devices.py`).
+   Every parameter is optional and the default is the previous behaviour, so
+   existing callers — including this project's own UI — are unaffected.
+
+4. This NOTICE and the LICENSE described above.
+
+
+Deliberately not changed
+------------------------
+
+The role model, the absence of Alembic, the frontend, and the backup engine.
+None is needed for integration, and each would make this fork harder to keep
+current with upstream.
