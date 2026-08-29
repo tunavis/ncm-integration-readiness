@@ -42,12 +42,23 @@ Modifications in this fork
    Every parameter is optional and the default is the previous behaviour, so
    existing callers — including this project's own UI — are unaffected.
 
-4. This NOTICE and the LICENSE described above.
+4. Browser sign-in through an identity provider (`backend/app/api/sso.py`, and
+   a button plus a fragment handler in `backend/app/web/index.html`).
+   Off unless configured. Authorization-code flow with `state`, PKCE and a
+   `nonce`; the callback mints *this application's own* access token, so every
+   route, permission check and the existing page carry on unchanged. The local
+   username-and-password login is untouched and remains the default.
+
+5. Packaging: a Dockerfile and a compose file (see below).
+
+6. This NOTICE and the LICENSE described above.
 
 
 Deliberately not changed
 ------------------------
 
-The role model, the absence of Alembic, the frontend, and the backup engine.
+The role model, the absence of Alembic, and the backup engine. The frontend was
+not replaced either: browser sign-in added one button and a few lines to the
+existing page rather than bringing in a framework.
 None is needed for integration, and each would make this fork harder to keep
 current with upstream.

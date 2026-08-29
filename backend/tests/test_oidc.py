@@ -80,6 +80,45 @@ class TestTheTwoTokenTypesNeverMeet:
         assert oidc.claims_for("not-a-token") is None
 
 
+class TestTheInternalOrigin:
+    """A container deployment reaches the provider on a different origin than the
+    browser does, but tokens are minted with the public issuer either way."""
+
+    def test_nothing_is_rewritten_when_it_is_unset(self, monkeypatch):
+        monkeypatch.setattr(settings, "oidc_internal_base_url", "")
+
+        assert oidc.internal(f"{ISSUER}/protocol/openid-connect/token") == (
+            f"{ISSUER}/protocol/openid-connect/token"
+        )
+
+    def test_only_the_origin_is_replaced(self, monkeypatch):
+        monkeypatch.setattr(settings, "oidc_internal_base_url", "http://keycloak:8080")
+
+        rewritten = oidc.internal(f"{ISSUER}/protocol/openid-connect/token")
+
+        assert rewritten == "http://keycloak:8080/realms/company/protocol/openid-connect/token"
+
+    def test_validation_still_expects_the_public_issuer(self, configured, monkeypatch):
+        """The rewrite is only for calls we make. The provider mints tokens with
+        its public issuer, so that is what the token says and what must still be
+        checked -- validating against the internal origin would reject every
+        genuine token."""
+        monkeypatch.setattr(settings, "oidc_internal_base_url", "http://keycloak:8080")
+        monkeypatch.setattr(oidc, "_jwks", lambda refresh=False: {"keys": []})
+        seen = {}
+
+        def capture(token, key, **kwargs):
+            seen.update(kwargs)
+            return {"sub": "someone"}
+
+        monkeypatch.setattr(oidc.jwt, "decode", capture)
+
+        oidc.verify("a-token", audience=AUDIENCE)
+
+        assert seen["issuer"] == ISSUER
+        assert "keycloak:8080" not in seen["issuer"]
+
+
 class TestProvisioning:
     def test_a_user_is_created_on_first_sight_with_least_privilege(self, configured, db):
         claims = {"preferred_username": "companyos", "name": "Company OS", "email": "os@example"}

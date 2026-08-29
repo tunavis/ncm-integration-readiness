@@ -86,6 +86,10 @@ input:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,9
       <div class="field"><label>Password</label><input id="loginPassword" type="password" autocomplete="current-password" required></div>
       <button id="loginButton" class="btn btn-primary login-submit">Sign in</button>
     </form>
+    <div id="ssoBlock" style="display:none">
+      <p class="message" style="margin:14px 0 10px">or</p>
+      <a id="ssoButton" class="btn btn-primary login-submit" style="display:block;text-align:center;text-decoration:none" href="/auth/sso/login">Sign in with Company OS</a>
+    </div>
     <p id="loginMessage" class="message"></p>
   </div></div>
   <div class="login-right"><div><h2>Secure network configuration management.</h2>
@@ -330,6 +334,24 @@ async function importCSV(e){const file=e.target.files?.[0];e.target.value="";if(
 function closeCSVModal(){$("csvModal").classList.add("hidden")}
 document.addEventListener("keydown",e=>{if(e.key==="Escape")["userModal","editModal","viewerModal","scheduleModal","csvModal"].forEach(id=>$(id).classList.add("hidden"))});
 async function validateSession(){if(!token){showLogin();return}try{const r=await api("/api/auth/me");if(!r.ok)throw Error();currentUser=await r.json();showApp();await loadAll()}catch(e){localStorage.removeItem("ncm_token");token="";showLogin()}}
+// Single sign-on hands the token back in the fragment: never sent to a server,
+// never in an access log, never in a Referer. Take it, store it exactly as a
+// local login would, and clear it out of the address bar before anything else
+// runs -- including out of the history entry, so Back does not restore it.
+(function adoptSsoToken(){
+  const found = /[#&]ncm_token=([^&]+)/.exec(location.hash || "");
+  if (!found) return;
+  token = decodeURIComponent(found[1]);
+  localStorage.setItem("ncm_token", token);
+  history.replaceState(null, "", location.pathname + location.search);
+})();
+
+// Offer the button only where it would work, so a deployment without single
+// sign-on shows no door that leads nowhere.
+fetch("/auth/sso/enabled").then(r => r.json()).then(d => {
+  if (d.enabled) $("ssoBlock").style.display = "block";
+}).catch(() => {});
+
 validateSession();
 </script>
 </body>

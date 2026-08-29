@@ -24,6 +24,7 @@ Three rules keep this from becoming a hole in the front door:
 import json
 import secrets
 import time
+import urllib.parse
 import urllib.request
 
 from jose import JWTError, jwt
@@ -49,23 +50,57 @@ def enabled() -> bool:
     return bool(settings.oidc_issuer and settings.oidc_audience)
 
 
+def internal(url: str) -> str:
+    """Rewrite a provider URL onto the origin this server reaches it on.
+
+    In a container deployment the browser reaches the identity provider through
+    a proxy and this service reaches it directly, so the two cannot use the same
+    origin — but tokens are minted with the *public* issuer, so that is what we
+    keep validating against. Only server-to-server calls are rewritten; anything
+    the browser is sent to stays public.
+
+    Unset, this changes nothing.
+    """
+    if not settings.oidc_internal_base_url:
+        return url
+    parts = urllib.parse.urlsplit(url)
+    internal_parts = urllib.parse.urlsplit(settings.oidc_internal_base_url.rstrip("/"))
+    return urllib.parse.urlunsplit(
+        (internal_parts.scheme, internal_parts.netloc, parts.path, parts.query, parts.fragment)
+    )
+
+
 def _get_json(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=settings.oidc_request_timeout_seconds) as response:
+    with urllib.request.urlopen(
+        internal(url), timeout=settings.oidc_request_timeout_seconds
+    ) as response:
         return json.loads(response.read())
 
 
-def _jwks(refresh: bool = False) -> dict:
-    """The realm's public keys, cached.
+def discovery(refresh: bool = False) -> dict:
+    """The provider's own description of itself, cached.
 
     Discovered from the issuer rather than assembled from it, so this works
-    against any OpenID provider instead of only Keycloak's URL layout.
+    against any OpenID provider instead of only Keycloak's URL layout. The
+    browser sign-in flow needs the authorization and token endpoints from here;
+    token validation needs the key set.
     """
+    cached = _cache.get("discovery")
+    if cached and not refresh and cached[0] > time.time():
+        return cached[1]
+
+    document = _get_json(settings.oidc_issuer.rstrip("/") + "/.well-known/openid-configuration")
+    _cache["discovery"] = (time.time() + JWKS_TTL_SECONDS, document)
+    return document
+
+
+def _jwks(refresh: bool = False) -> dict:
+    """The realm's public keys, cached."""
     cached = _cache.get("jwks")
     if cached and not refresh and cached[0] > time.time():
         return cached[1]
 
-    discovery = _get_json(settings.oidc_issuer.rstrip("/") + "/.well-known/openid-configuration")
-    keys = _get_json(discovery["jwks_uri"])
+    keys = _get_json(discovery(refresh=refresh)["jwks_uri"])
     _cache["jwks"] = (time.time() + JWKS_TTL_SECONDS, keys)
     return keys
 
@@ -90,21 +125,37 @@ def claims_for(token: str) -> dict | None:
         # validated against a public key.
         return None
 
-    claims = _decode(token)
+    return verify(token, audience=settings.oidc_audience)
+
+
+def verify(token: str, *, audience: str, nonce: str | None = None) -> dict | None:
+    """Validate a provider-issued token against the realm's keys.
+
+    Used for two different tokens with two different audiences: an access token
+    presented to this API, and an ID token returned by the browser sign-in flow.
+    The audience is therefore a parameter and never a default -- getting it wrong
+    is what makes a token minted for another client work here.
+    """
+    claims = _decode(token, audience)
     if claims is None:
         # A key rotation invalidates the cache before its TTL expires. One
-        # refresh and one retry, rather than an hour of 401s.
-        claims = _decode(token, refresh=True)
+        # refresh and one retry, rather than an hour of failures.
+        claims = _decode(token, audience, refresh=True)
+    if claims is None:
+        return None
+    if nonce is not None and claims.get("nonce") != nonce:
+        # Binds the ID token to the sign-in this browser actually started.
+        return None
     return claims
 
 
-def _decode(token: str, refresh: bool = False) -> dict | None:
+def _decode(token: str, audience: str, refresh: bool = False) -> dict | None:
     try:
         return jwt.decode(
             token,
             _jwks(refresh=refresh),
             algorithms=[settings.oidc_algorithm],
-            audience=settings.oidc_audience,
+            audience=audience,
             issuer=settings.oidc_issuer.rstrip("/"),
         )
     except (JWTError, OSError, KeyError, ValueError):

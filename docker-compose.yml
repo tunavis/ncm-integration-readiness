@@ -25,11 +25,14 @@ services:
       DEFAULT_ADMIN_USERNAME: ${NCM_ADMIN_USERNAME:-admin}
       DEFAULT_ADMIN_PASSWORD: ${NCM_ADMIN_PASSWORD:?set NCM_ADMIN_PASSWORD in .env}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${NCM_TOKEN_MINUTES:-480}
-      # Identity-provider tokens stay off here. Company OS authenticates with a
-      # dedicated local `viewer` account; turning this on is a separate decision
-      # that needs the realm's issuer and this service's audience.
+      # Identity provider. Blank keeps the NCM on local logins alone.
       OIDC_ISSUER: ${NCM_OIDC_ISSUER:-}
       OIDC_AUDIENCE: ${NCM_OIDC_AUDIENCE:-}
+      OIDC_CLIENT_ID: ${NCM_OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${NCM_OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URL: ${NCM_OIDC_REDIRECT_URL:-}
+      OIDC_INTERNAL_BASE_URL: ${NCM_OIDC_INTERNAL_BASE_URL:-}
+      OIDC_COOKIE_SECURE: ${NCM_OIDC_COOKIE_SECURE:-true}
     ports:
       # Host-local only. See the note above.
       - "127.0.0.1:${NCM_PUBLISHED_PORT:-8100}:8000"
