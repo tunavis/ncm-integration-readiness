@@ -292,7 +292,7 @@ function can(p){const r=currentUser?.role;if(r==="super_admin")return true;retur
 function showLogin(){$("appShell").classList.add("hidden");$("loginScreen").classList.remove("hidden")}
 function showApp(){$("loginScreen").classList.add("hidden");$("appShell").classList.remove("hidden");const u=currentUser?.username||"admin";$("sideUser").textContent=u;$("sideRole").textContent=(currentUser?.role||"viewer").replace("_"," ");$("avatar").textContent=u.slice(0,2).toUpperCase();document.querySelectorAll("[data-permission]").forEach(el=>el.classList.toggle("hidden",!can(el.dataset.permission)))}
 async function login(){const b=$("loginButton");b.disabled=true;b.textContent="Signing in...";msg("loginMessage","");try{const r=await fetch("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:$("loginUsername").value.trim(),password:$("loginPassword").value})}),d=await r.json();if(!r.ok){msg("loginMessage",d.detail||"Invalid username or password","error");return}token=d.access_token;localStorage.setItem("ncm_token",token);const me=await fetch("/api/auth/me",{headers:{Authorization:"Bearer "+token}});if(!me.ok)throw Error("Unable to read user session");currentUser=await me.json();showApp();await loadAll();showPage("dashboard");toast("Login successful")}catch(e){msg("loginMessage",e.message||"Unable to connect to server","error")}finally{b.disabled=false;b.textContent="Sign in"}}
-function logout(){sessionStorage.setItem("ncm_sso_attempted","1");localStorage.removeItem("ncm_token");token="";currentUser=null;cachedDevices=[];cachedBackups=[];cachedSchedules=[];showLogin();msg("loginMessage","You have been logged out.","success")}
+function logout(){localStorage.removeItem("ncm_token");sessionStorage.removeItem("ncm_sso_attempted_at");token="";currentUser=null;cachedDevices=[];cachedBackups=[];cachedSchedules=[];if(ssoAvailable){location.href="/?local=1&signedout=1";return}showLogin();msg("loginMessage","You have been logged out.","success")}
 $("loginForm").onsubmit=e=>{e.preventDefault();login()}
 function showPage(n){document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));const page=$("page-"+n);if(!page)return;page.classList.add("active");document.querySelectorAll(".nav button").forEach(x=>x.classList.toggle("active",x.dataset.page===n));$("topTitle").textContent={dashboard:"Dashboard",devices:"Devices",add:"Add Device",backups:"Backup History",diff:"Config Diff",schedules:"Schedules",users:"Users",audit:"Audit Logs",cloud:"Cloud Storage",automation:"Automation Lab",monitoring:"Monitoring & Health",compliance:"Compliance",reports:"Reports & Analytics",integrations:"Integrations"}[n]||"Network Config Manager";if(n==="devices")renderDevices();if(n==="backups")loadBackups();if(n==="diff")loadDiffDevices();if(n==="schedules")loadSchedules();if(n==="users")loadUsers();if(n==="audit")loadAudit()}
 function selectVendor(v){document.querySelectorAll(".vendor-card").forEach(x=>x.classList.toggle("selected",x.dataset.v===v))}
@@ -346,7 +346,7 @@ async function validateSession(){if(!token){showLogin();return}try{const r=await
   if (!found) return;
   token = decodeURIComponent(found[1]);
   localStorage.setItem("ncm_token", token);
-  sessionStorage.removeItem("ncm_sso_attempted");
+  sessionStorage.removeItem("ncm_sso_attempted_at");
   history.replaceState(null, "", location.pathname + location.search);
 })();
 
@@ -365,19 +365,27 @@ const SSO_MESSAGES = {
   verify:   "Company OS returned an identity we could not verify.",
   inactive: "Your account is not active on this system. Ask an administrator."
 };
+let ssoAvailable = false;
 const ssoQuery = new URLSearchParams(location.search);
 const ssoError = ssoQuery.get("sso_error");
 const wantsLocal = ssoQuery.has("local");
 if (ssoError || wantsLocal) history.replaceState(null, "", location.pathname);
 if (ssoError) msg("loginMessage", SSO_MESSAGES[ssoError] || "Single sign-on failed.", "error");
+if (ssoQuery.has("signedout")) msg("loginMessage", "You have been logged out.", "success");
 
 fetch("/auth/sso/enabled").then(r => r.json()).then(d => {
+  ssoAvailable = d.enabled;
   if (!d.enabled) return;
   $("ssoBlock").style.display = "block";
   $("localHint").style.display = "block";
   if (token || wantsLocal || ssoError) return;
-  if (sessionStorage.getItem("ncm_sso_attempted")) return;
-  sessionStorage.setItem("ncm_sso_attempted", "1");
+  // Time-bounded, not sticky. A redirect loop returns within milliseconds, so a
+  // recent attempt means "we are looping, stop"; an attempt from a minute ago
+  // means "the last try failed, and this is a person trying again". A permanent
+  // flag would let one bad sign-in disable single sign-on for the whole tab.
+  const lastAttempt = Number(sessionStorage.getItem("ncm_sso_attempted_at") || 0);
+  if (Date.now() - lastAttempt < 20000) return;
+  sessionStorage.setItem("ncm_sso_attempted_at", String(Date.now()));
   location.href = "/auth/sso/login";
 }).catch(() => {});
 
