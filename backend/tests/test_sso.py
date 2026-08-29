@@ -9,6 +9,10 @@ The three tests worth reading are the ones that assert a *refusal*: a callback
 whose `state` does not match the cookie, a callback with no cookie at all, and an
 ID token minted for a different sign-in. Each corresponds to a real attack, and
 each is only actually prevented if removing the check breaks the test.
+
+A refusal is a redirect back to the login page carrying a reason, not a JSON
+error. That is deliberate: the page shows the reason *and* stops redirecting, so
+a broken provider cannot become a loop nobody can escape.
 """
 
 import urllib.parse
@@ -63,6 +67,14 @@ def configured(monkeypatch):
         },
     )
     return settings
+
+
+def failed_with(response) -> str:
+    """The reason a callback redirected back to the page with."""
+    assert response.status_code == 303, response
+    location = response.headers["location"]
+    assert location.startswith("/?sso_error="), location
+    return location.split("=", 1)[1]
 
 
 class FakeRequest:
@@ -142,30 +154,29 @@ class TestStartingTheFlow:
 class TestTheCallbackRefuses:
     def test_a_callback_this_browser_did_not_start(self, configured, db):
         """No cookie: someone handed this URL to the browser."""
-        with pytest.raises(HTTPException) as refusal:
-            sso.sso_callback(FakeRequest(), code="c", state="whatever", db=db)
-
-        assert refusal.value.status_code == 400
+        assert failed_with(sso.sso_callback(FakeRequest(), code="c", state="x", db=db)) == (
+            sso.ERROR_STATE
+        )
 
     def test_a_state_that_does_not_match_the_cookie(self, configured, db):
         _, cookie = start()
 
-        with pytest.raises(HTTPException) as refusal:
-            sso.sso_callback(
-                FakeRequest({sso.STATE_COOKIE: cookie}), code="c", state="not-it", db=db
-            )
+        response = sso.sso_callback(
+            FakeRequest({sso.STATE_COOKIE: cookie}), code="c", state="not-it", db=db
+        )
 
-        assert refusal.value.status_code == 400
+        assert failed_with(response) == sso.ERROR_STATE
 
     def test_a_forged_state_cookie(self, configured, db):
         forged = jwt.encode(
             {"state": "mine", "verifier": "v", "nonce": "n"}, "not-the-secret", algorithm=ALGORITHM
         )
 
-        with pytest.raises(HTTPException) as refusal:
-            sso.sso_callback(FakeRequest({sso.STATE_COOKIE: forged}), code="c", state="mine", db=db)
+        response = sso.sso_callback(
+            FakeRequest({sso.STATE_COOKIE: forged}), code="c", state="mine", db=db
+        )
 
-        assert refusal.value.status_code == 400
+        assert failed_with(response) == sso.ERROR_STATE
 
     def test_an_identity_token_that_does_not_verify(self, configured, db, monkeypatch):
         """Covers a wrong signature, a wrong issuer, a wrong audience, and a
@@ -175,23 +186,45 @@ class TestTheCallbackRefuses:
         monkeypatch.setattr(sso, "_exchange", lambda code, verifier: {"id_token": "rubbish"})
         monkeypatch.setattr(oidc, "verify", lambda token, audience, nonce=None: None)
 
-        with pytest.raises(HTTPException) as refusal:
-            sso.sso_callback(
-                FakeRequest({sso.STATE_COOKIE: cookie}), code="c", state=query["state"], db=db
-            )
+        response = sso.sso_callback(
+            FakeRequest({sso.STATE_COOKIE: cookie}), code="c", state=query["state"], db=db
+        )
 
-        assert refusal.value.status_code == 401
+        assert failed_with(response) == sso.ERROR_VERIFY
 
     def test_a_provider_that_returns_no_identity_token(self, configured, db, monkeypatch):
         query, cookie = start()
         monkeypatch.setattr(sso, "_exchange", lambda code, verifier: {"access_token": "only"})
 
-        with pytest.raises(HTTPException) as refusal:
-            sso.sso_callback(
-                FakeRequest({sso.STATE_COOKIE: cookie}), code="c", state=query["state"], db=db
-            )
+        response = sso.sso_callback(
+            FakeRequest({sso.STATE_COOKIE: cookie}), code="c", state=query["state"], db=db
+        )
 
-        assert refusal.value.status_code == 502
+        assert failed_with(response) == sso.ERROR_PROVIDER
+
+
+    def test_a_disabled_account(self, configured, db, monkeypatch):
+        """Disabling a user must stop them whichever door they came through."""
+        db.add(User(username="gone", password_hash="x", role="viewer", is_active=False))
+        db.commit()
+        query, cookie = start()
+        monkeypatch.setattr(sso, "_exchange", lambda code, verifier: {"id_token": "t"})
+        monkeypatch.setattr(
+            oidc, "verify", lambda token, audience, nonce=None: {"preferred_username": "gone"}
+        )
+
+        response = sso.sso_callback(
+            FakeRequest({sso.STATE_COOKIE: cookie}), code="c", state=query["state"], db=db
+        )
+
+        assert failed_with(response) == sso.ERROR_INACTIVE
+
+    def test_a_refusal_clears_the_state_cookie(self, configured, db):
+        """So a stale cookie cannot be replayed into a later attempt."""
+        response = sso.sso_callback(FakeRequest(), code="c", state="x", db=db)
+        cleared = [v.decode() for k, v in response.raw_headers if k == b"set-cookie"]
+
+        assert any(sso.STATE_COOKIE in header for header in cleared)
 
 
 class TestASuccessfulSignIn:

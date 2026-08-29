@@ -46,8 +46,14 @@ Modifications in this fork
    a button plus a fragment handler in `backend/app/web/index.html`).
    Off unless configured. Authorization-code flow with `state`, PKCE and a
    `nonce`; the callback mints *this application's own* access token, so every
-   route, permission check and the existing page carry on unchanged. The local
-   username-and-password login is untouched and remains the default.
+   route, permission check and the existing page carry on unchanged.
+
+   Where it is configured it is the way in: an unauthenticated visitor is sent
+   straight to the provider rather than shown a password box for an account they
+   do not have. The local login is not removed -- `/?local=1` always reaches it,
+   which is what gets you in when the provider is down. A failed sign-in returns
+   to the page with a reason and does not redirect again, so a broken provider
+   cannot become a loop.
 
 5. Packaging: a Dockerfile and a compose file (see below).
 
@@ -57,8 +63,8 @@ Modifications in this fork
 Deliberately not changed
 ------------------------
 
-The role model, the absence of Alembic, and the backup engine. The frontend was
-not replaced either: browser sign-in added one button and a few lines to the
-existing page rather than bringing in a framework.
-None is needed for integration, and each would make this fork harder to keep
-current with upstream.
+The role model, the absence of Alembic, and the backup engine. None is needed for
+integration, and each would make this fork harder to keep current with upstream.
+
+The frontend was not replaced either: browser sign-in added a button, a link and
+about twenty lines to the existing page.

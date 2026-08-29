@@ -50,6 +50,26 @@ router = APIRouter(tags=["Authentication"])
 STATE_COOKIE = "ncm_sso_state"
 STATE_TTL_SECONDS = 600
 
+#: Why a sign-in did not complete, as a short code the page turns into a
+#: sentence. Deliberately not the provider's own error text: that names the
+#: client and is of no use to whoever is looking at the screen.
+ERROR_STATE = "state"
+ERROR_PROVIDER = "provider"
+ERROR_VERIFY = "verify"
+ERROR_INACTIVE = "inactive"
+
+
+def _failed(reason: str) -> RedirectResponse:
+    """Send the browser back to the page with something it can explain.
+
+    A failed sign-in must land on the login page, not on a JSON error: the page
+    then shows the reason *and* stops redirecting, which is what keeps a broken
+    provider from becoming a loop nobody can escape.
+    """
+    response = RedirectResponse(f"/?sso_error={reason}", status_code=303)
+    response.delete_cookie(STATE_COOKIE, path="/auth/sso")
+    return response
+
 
 def enabled() -> bool:
     """Whether browser sign-in is configured. All of it, or none of it."""
@@ -135,23 +155,26 @@ def sso_callback(
     _require_enabled()
 
     started = _started_flow(request)
-    if not code or not state or state != started["state"]:
+    if started is None or not code or not state or state != started["state"]:
         # Either the provider sent us nothing usable, or this callback did not
         # come from a sign-in this browser started.
-        raise HTTPException(400, "Invalid single sign-on response")
+        return _failed(ERROR_STATE)
 
     tokens = _exchange(code, started["verifier"])
+    if tokens is None:
+        return _failed(ERROR_PROVIDER)
+
     identity = tokens.get("id_token")
     if not identity:
-        raise HTTPException(502, "The identity provider returned no identity token")
+        return _failed(ERROR_PROVIDER)
 
     claims = oidc.verify(identity, audience=settings.oidc_client_id, nonce=started["nonce"])
     if claims is None:
-        raise HTTPException(401, "The identity token could not be verified")
+        return _failed(ERROR_VERIFY)
 
     user = oidc.resolve_user(db, claims)
     if not user:
-        raise HTTPException(401, "User inactive or not found")
+        return _failed(ERROR_INACTIVE)
 
     record_audit(
         db, user, "LOGIN", "auth", user.username, "SUCCESS", "single sign-on",
@@ -170,18 +193,18 @@ def sso_callback(
     return response
 
 
-def _started_flow(request: Request) -> dict:
-    """Recover what this browser started, or refuse."""
+def _started_flow(request: Request) -> dict | None:
+    """Recover what this browser started. ``None`` means it did not start here."""
     cookie = request.cookies.get(STATE_COOKIE)
     if not cookie:
-        raise HTTPException(400, "This sign-in did not start here, or it expired")
+        return None
     try:
         return jwt.decode(cookie, settings.secret_key, algorithms=[ALGORITHM])
-    except JWTError as error:
-        raise HTTPException(400, "This sign-in did not start here, or it expired") from error
+    except JWTError:
+        return None
 
 
-def _exchange(code: str, verifier: str) -> dict:
+def _exchange(code: str, verifier: str) -> dict | None:
     """Trade the authorization code for tokens, as a confidential client."""
     try:
         # Server-to-server, so it goes to the origin this service can reach.
@@ -206,7 +229,7 @@ def _exchange(code: str, verifier: str) -> dict:
             request, timeout=settings.oidc_request_timeout_seconds
         ) as response:
             return json.loads(response.read())
-    except (OSError, KeyError, ValueError) as error:
-        # Deliberately vague to the caller: the provider's own error text can
+    except (OSError, KeyError, ValueError):
+        # Deliberately silent to the caller: the provider's own error text can
         # name the client and is of no use to whoever is looking at the page.
-        raise HTTPException(502, "The identity provider rejected the sign-in") from error
+        return None

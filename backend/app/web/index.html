@@ -91,6 +91,9 @@ input:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,9
       <a id="ssoButton" class="btn btn-primary login-submit" style="display:block;text-align:center;text-decoration:none" href="/auth/sso/login">Sign in with Company OS</a>
     </div>
     <p id="loginMessage" class="message"></p>
+    <p id="localHint" class="message" style="display:none;font-size:12px;opacity:.7">
+      Signed in through Company OS. <a href="/?local=1">Use a local account</a> if it is unavailable.
+    </p>
   </div></div>
   <div class="login-right"><div><h2>Secure network configuration management.</h2>
     <p>Centralize device inventory, automated configuration backups, schedules and configuration comparison.</p>
@@ -289,7 +292,7 @@ function can(p){const r=currentUser?.role;if(r==="super_admin")return true;retur
 function showLogin(){$("appShell").classList.add("hidden");$("loginScreen").classList.remove("hidden")}
 function showApp(){$("loginScreen").classList.add("hidden");$("appShell").classList.remove("hidden");const u=currentUser?.username||"admin";$("sideUser").textContent=u;$("sideRole").textContent=(currentUser?.role||"viewer").replace("_"," ");$("avatar").textContent=u.slice(0,2).toUpperCase();document.querySelectorAll("[data-permission]").forEach(el=>el.classList.toggle("hidden",!can(el.dataset.permission)))}
 async function login(){const b=$("loginButton");b.disabled=true;b.textContent="Signing in...";msg("loginMessage","");try{const r=await fetch("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:$("loginUsername").value.trim(),password:$("loginPassword").value})}),d=await r.json();if(!r.ok){msg("loginMessage",d.detail||"Invalid username or password","error");return}token=d.access_token;localStorage.setItem("ncm_token",token);const me=await fetch("/api/auth/me",{headers:{Authorization:"Bearer "+token}});if(!me.ok)throw Error("Unable to read user session");currentUser=await me.json();showApp();await loadAll();showPage("dashboard");toast("Login successful")}catch(e){msg("loginMessage",e.message||"Unable to connect to server","error")}finally{b.disabled=false;b.textContent="Sign in"}}
-function logout(){localStorage.removeItem("ncm_token");token="";currentUser=null;cachedDevices=[];cachedBackups=[];cachedSchedules=[];showLogin();msg("loginMessage","You have been logged out.","success")}
+function logout(){sessionStorage.setItem("ncm_sso_attempted","1");localStorage.removeItem("ncm_token");token="";currentUser=null;cachedDevices=[];cachedBackups=[];cachedSchedules=[];showLogin();msg("loginMessage","You have been logged out.","success")}
 $("loginForm").onsubmit=e=>{e.preventDefault();login()}
 function showPage(n){document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));const page=$("page-"+n);if(!page)return;page.classList.add("active");document.querySelectorAll(".nav button").forEach(x=>x.classList.toggle("active",x.dataset.page===n));$("topTitle").textContent={dashboard:"Dashboard",devices:"Devices",add:"Add Device",backups:"Backup History",diff:"Config Diff",schedules:"Schedules",users:"Users",audit:"Audit Logs",cloud:"Cloud Storage",automation:"Automation Lab",monitoring:"Monitoring & Health",compliance:"Compliance",reports:"Reports & Analytics",integrations:"Integrations"}[n]||"Network Config Manager";if(n==="devices")renderDevices();if(n==="backups")loadBackups();if(n==="diff")loadDiffDevices();if(n==="schedules")loadSchedules();if(n==="users")loadUsers();if(n==="audit")loadAudit()}
 function selectVendor(v){document.querySelectorAll(".vendor-card").forEach(x=>x.classList.toggle("selected",x.dataset.v===v))}
@@ -343,13 +346,39 @@ async function validateSession(){if(!token){showLogin();return}try{const r=await
   if (!found) return;
   token = decodeURIComponent(found[1]);
   localStorage.setItem("ncm_token", token);
+  sessionStorage.removeItem("ncm_sso_attempted");
   history.replaceState(null, "", location.pathname + location.search);
 })();
 
-// Offer the button only where it would work, so a deployment without single
-// sign-on shows no door that leads nowhere.
+// Where single sign-on is configured it is the way in, so an unauthenticated
+// visitor is sent straight to the provider rather than shown a password box for
+// an account they do not have. Three things stop that becoming a trap:
+//   ?local=1   always reaches the local form -- break-glass for when the
+//              provider is down, which is the whole reason not to delete it;
+//   ?sso_error a failed sign-in comes back here with a reason and does NOT
+//              redirect again;
+//   a session flag, so a provider that bounces us back without ever reaching
+//              our callback cannot produce a loop.
+const SSO_MESSAGES = {
+  state:    "That sign-in did not start here, or it expired. Try again.",
+  provider: "Company OS could not complete the sign-in. Try again, or sign in below.",
+  verify:   "Company OS returned an identity we could not verify.",
+  inactive: "Your account is not active on this system. Ask an administrator."
+};
+const ssoQuery = new URLSearchParams(location.search);
+const ssoError = ssoQuery.get("sso_error");
+const wantsLocal = ssoQuery.has("local");
+if (ssoError || wantsLocal) history.replaceState(null, "", location.pathname);
+if (ssoError) msg("loginMessage", SSO_MESSAGES[ssoError] || "Single sign-on failed.", "error");
+
 fetch("/auth/sso/enabled").then(r => r.json()).then(d => {
-  if (d.enabled) $("ssoBlock").style.display = "block";
+  if (!d.enabled) return;
+  $("ssoBlock").style.display = "block";
+  $("localHint").style.display = "block";
+  if (token || wantsLocal || ssoError) return;
+  if (sessionStorage.getItem("ncm_sso_attempted")) return;
+  sessionStorage.setItem("ncm_sso_attempted", "1");
+  location.href = "/auth/sso/login";
 }).catch(() => {});
 
 validateSession();
