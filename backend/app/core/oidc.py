@@ -22,12 +22,14 @@ Three rules keep this from becoming a hole in the front door:
 """
 
 import json
+import logging
 import secrets
 import time
 import urllib.parse
 import urllib.request
 
 from jose import JWTError, jwt
+from jose.exceptions import ExpiredSignatureError, JWTClaimsError
 
 from app.core.config import settings
 from app.core.rbac import ROLE_PERMISSIONS
@@ -37,6 +39,8 @@ from app.models.user import User
 #: How long the fetched key set is reused. A rotation is picked up sooner than
 #: this: a token naming a key we do not hold forces one refresh (see `_decode`).
 JWKS_TTL_SECONDS = 3600
+
+logger = logging.getLogger(__name__)
 
 _cache: dict[str, tuple[float, dict]] = {}
 
@@ -128,28 +132,49 @@ def claims_for(token: str) -> dict | None:
     return verify(token, audience=settings.oidc_audience)
 
 
-def verify(token: str, *, audience: str, nonce: str | None = None) -> dict | None:
+def verify(
+    token: str, *, audience: str, nonce: str | None = None, access_token: str | None = None
+) -> dict | None:
     """Validate a provider-issued token against the realm's keys.
 
     Used for two different tokens with two different audiences: an access token
     presented to this API, and an ID token returned by the browser sign-in flow.
     The audience is therefore a parameter and never a default -- getting it wrong
     is what makes a token minted for another client work here.
+
+    ``access_token`` belongs to the sign-in flow. An ID token from Keycloak
+    carries an ``at_hash``: a hash of the access token issued beside it, which
+    proves the two were minted together and that neither has been swapped for
+    another. Passing it is what allows that to be *checked* -- omit it and the
+    check cannot run.
     """
-    claims = _decode(token, audience)
+    claims = _decode(token, audience, access_token=access_token)
     if claims is None:
         # A key rotation invalidates the cache before its TTL expires. One
         # refresh and one retry, rather than an hour of failures.
-        claims = _decode(token, audience, refresh=True)
+        claims = _decode(token, audience, access_token=access_token, refresh=True)
     if claims is None:
         return None
     if nonce is not None and claims.get("nonce") != nonce:
         # Binds the ID token to the sign-in this browser actually started.
+        logger.warning(
+            "oidc: token rejected, nonce does not match the sign-in this browser started"
+        )
         return None
     return claims
 
 
-def _decode(token: str, audience: str, refresh: bool = False) -> dict | None:
+def _decode(
+    token: str, audience: str, access_token: str | None = None, refresh: bool = False
+) -> dict | None:
+    """Validate, or say why not.
+
+    Every rejection is logged with its reason. A token check that fails silently
+    is a token check nobody can debug: the caller only ever learns "no", and the
+    dozen ways of getting there -- wrong audience, wrong issuer, expired, clock
+    skew, an unreachable key set -- all look identical from outside. The reasons
+    are safe to log: they describe our own configuration, never the token.
+    """
     try:
         return jwt.decode(
             token,
@@ -157,9 +182,24 @@ def _decode(token: str, audience: str, refresh: bool = False) -> dict | None:
             algorithms=[settings.oidc_algorithm],
             audience=audience,
             issuer=settings.oidc_issuer.rstrip("/"),
+            access_token=access_token,
         )
-    except (JWTError, OSError, KeyError, ValueError):
-        return None
+    except JWTClaimsError as error:
+        # The signature was good and a claim was not: audience or issuer.
+        logger.warning(
+            "oidc: token rejected on a claim (%s). We required audience=%r issuer=%r",
+            error, audience, settings.oidc_issuer.rstrip("/"),
+        )
+    except ExpiredSignatureError:
+        logger.warning("oidc: token rejected as expired -- check the clock on this host")
+    except JWTError as error:
+        logger.warning("oidc: token rejected, signature or format (%s)", error)
+    except (OSError, KeyError, ValueError) as error:
+        logger.warning(
+            "oidc: could not validate, the key set was unreachable or unusable (%s: %s)",
+            type(error).__name__, error,
+        )
+    return None
 
 
 def resolve_user(db, claims: dict) -> User | None:

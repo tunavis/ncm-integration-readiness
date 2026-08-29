@@ -119,6 +119,23 @@ class TestTheInternalOrigin:
         assert "keycloak:8080" not in seen["issuer"]
 
 
+class TestWhatIsHandedToTheDecoder:
+    def test_the_access_token_is_passed_through_for_at_hash(self, configured, monkeypatch):
+        """Without it the decoder raises on `at_hash` and every sign-in fails."""
+        monkeypatch.setattr(oidc, "_jwks", lambda refresh=False: {"keys": []})
+        seen = {}
+
+        def capture(token, key, **kwargs):
+            seen.update(kwargs)
+            return {"sub": "someone"}
+
+        monkeypatch.setattr(oidc.jwt, "decode", capture)
+
+        oidc.verify("an-id-token", audience=AUDIENCE, access_token="the-access-token")
+
+        assert seen["access_token"] == "the-access-token"
+
+
 class TestProvisioning:
     def test_a_user_is_created_on_first_sight_with_least_privilege(self, configured, db):
         claims = {"preferred_username": "companyos", "name": "Company OS", "email": "os@example"}

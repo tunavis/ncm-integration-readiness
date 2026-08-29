@@ -184,7 +184,7 @@ class TestTheCallbackRefuses:
         all of them, and none of them may produce a session."""
         query, cookie = start()
         monkeypatch.setattr(sso, "_exchange", lambda code, verifier: {"id_token": "rubbish"})
-        monkeypatch.setattr(oidc, "verify", lambda token, audience, nonce=None: None)
+        monkeypatch.setattr(oidc, "verify", lambda token, audience, nonce=None, access_token=None: None)
 
         response = sso.sso_callback(
             FakeRequest({sso.STATE_COOKIE: cookie}), code="c", state=query["state"], db=db
@@ -208,9 +208,13 @@ class TestTheCallbackRefuses:
         db.add(User(username="gone", password_hash="x", role="viewer", is_active=False))
         db.commit()
         query, cookie = start()
-        monkeypatch.setattr(sso, "_exchange", lambda code, verifier: {"id_token": "t"})
         monkeypatch.setattr(
-            oidc, "verify", lambda token, audience, nonce=None: {"preferred_username": "gone"}
+            sso, "_exchange", lambda code, verifier: {"id_token": "t", "access_token": "a"}
+        )
+        monkeypatch.setattr(
+            oidc,
+            "verify",
+            lambda token, audience, nonce=None, access_token=None: {"preferred_username": "gone"},
         )
 
         response = sso.sso_callback(
@@ -236,13 +240,13 @@ class TestASuccessfulSignIn:
         def exchange(code, verifier):
             seen["code"] = code
             seen["verifier"] = verifier
-            return {"id_token": "an-id-token"}
+            return {"id_token": "an-id-token", "access_token": "an-access-token"}
 
         monkeypatch.setattr(sso, "_exchange", exchange)
         monkeypatch.setattr(
             oidc,
             "verify",
-            lambda token, audience, nonce=None: {
+            lambda token, audience, nonce=None, access_token=None: {
                 "preferred_username": "mark",
                 "name": "Mark",
                 "email": "mark@example",
@@ -253,6 +257,33 @@ class TestASuccessfulSignIn:
             FakeRequest({sso.STATE_COOKIE: cookie}), code="the-code", state=query["state"], db=db
         )
         return response, seen, jwt.decode(cookie, settings.secret_key, algorithms=[ALGORITHM])
+
+    def test_the_access_token_is_handed_to_verification(self, configured, db, monkeypatch):
+        """An ID token from Keycloak carries `at_hash`, a hash of the access
+        token issued beside it. Verification cannot check that binding without
+        the access token, and a checker that cannot run is not a check.
+
+        This is a regression test with a story: every other test here stubs
+        `oidc.verify`, so nothing exercised the real decoder, and the first real
+        sign-in failed on exactly this.
+        """
+        query, cookie = start()
+        monkeypatch.setattr(
+            sso, "_exchange", lambda code, verifier: {"id_token": "i", "access_token": "a"}
+        )
+        seen = {}
+
+        def capture(token, *, audience, nonce=None, access_token=None):
+            seen["access_token"] = access_token
+            return {"preferred_username": "mark", "nonce": nonce}
+
+        monkeypatch.setattr(oidc, "verify", capture)
+
+        sso.sso_callback(
+            FakeRequest({sso.STATE_COOKIE: cookie}), code="c", state=query["state"], db=db
+        )
+
+        assert seen["access_token"] == "a"
 
     def test_the_code_is_exchanged_with_the_matching_verifier(self, completed):
         _, seen, held = completed

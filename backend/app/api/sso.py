@@ -168,7 +168,14 @@ def sso_callback(
     if not identity:
         return _failed(ERROR_PROVIDER)
 
-    claims = oidc.verify(identity, audience=settings.oidc_client_id, nonce=started["nonce"])
+    # The access token goes with it so the ID token's `at_hash` can be checked:
+    # it proves the two were minted together and neither was swapped.
+    claims = oidc.verify(
+        identity,
+        audience=settings.oidc_client_id,
+        nonce=started["nonce"],
+        access_token=tokens.get("access_token"),
+    )
     if claims is None:
         return _failed(ERROR_VERIFY)
 
