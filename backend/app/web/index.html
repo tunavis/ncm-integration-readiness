@@ -365,7 +365,7 @@ const SSO_MESSAGES = {
   verify:   "Company OS returned an identity we could not verify.",
   inactive: "Your account is not active on this system. Ask an administrator."
 };
-let ssoAvailable = false;
+let ssoAvailable = false, redirecting = false;
 const ssoQuery = new URLSearchParams(location.search);
 const ssoError = ssoQuery.get("sso_error");
 const wantsLocal = ssoQuery.has("local");
@@ -373,23 +373,46 @@ if (ssoError || wantsLocal) history.replaceState(null, "", location.pathname);
 if (ssoError) msg("loginMessage", SSO_MESSAGES[ssoError] || "Single sign-on failed.", "error");
 if (ssoQuery.has("signedout")) msg("loginMessage", "You have been logged out.", "success");
 
-fetch("/auth/sso/enabled").then(r => r.json()).then(d => {
-  ssoAvailable = d.enabled;
-  if (!d.enabled) return;
-  $("ssoBlock").style.display = "block";
-  $("localHint").style.display = "block";
-  if (token || wantsLocal || ssoError) return;
-  // Time-bounded, not sticky. A redirect loop returns within milliseconds, so a
-  // recent attempt means "we are looping, stop"; an attempt from a minute ago
-  // means "the last try failed, and this is a person trying again". A permanent
-  // flag would let one bad sign-in disable single sign-on for the whole tab.
-  const lastAttempt = Number(sessionStorage.getItem("ncm_sso_attempted_at") || 0);
-  if (Date.now() - lastAttempt < 20000) return;
-  sessionStorage.setItem("ncm_sso_attempted_at", String(Date.now()));
-  location.href = "/auth/sso/login";
-}).catch(() => {});
+ssoAvailable = __SSO_ENABLED__;
 
-validateSession();
+// One decision, in the only order that is correct: find out whether we have a
+// working session first, and only then decide whether to ask the provider for
+// one. Doing it the other way round -- which this did -- means an expired token
+// suppresses the redirect, and the visitor is shown a password box a moment
+// after we discover their session is dead. They are signed in to the provider
+// the whole time.
+(async function boot() {
+  if (ssoAvailable) {
+    $("ssoBlock").style.display = "block";
+    $("localHint").style.display = "block";
+  }
+
+  if (token) {
+    try {
+      const r = await api("/api/auth/me");
+      if (r.ok) {
+        currentUser = await r.json();
+        showApp();
+        await loadAll();
+        return;                       // a working session; nothing else to do
+      }
+    } catch (e) { /* unreachable or refused; treated the same as no session */ }
+    localStorage.removeItem("ncm_token");
+    token = "";
+  }
+
+  // No usable session. The provider is the way in, unless we have been asked
+  // for the local form, have just failed, or are looping.
+  const lastAttempt = Number(sessionStorage.getItem("ncm_sso_attempted_at") || 0);
+  const looping = Date.now() - lastAttempt < 20000;
+  if (ssoAvailable && !wantsLocal && !ssoError && !looping) {
+    sessionStorage.setItem("ncm_sso_attempted_at", String(Date.now()));
+    location.replace("/auth/sso/login");
+    return;                           // never paint a form we are leaving
+  }
+
+  showLogin();
+})();
 </script>
 </body>
 </html>
