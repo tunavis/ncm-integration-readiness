@@ -142,6 +142,7 @@ input:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,9
 <div class="kpi"><div class="kpi-icon">!</div><div><label>Failed Backups</label><strong id="statFailed">—</strong></div></div>
 </div>
 <div class="panel"><div class="panel-head"><h3>Recent Devices</h3><p>Quick access to registered network devices.</p></div><div class="panel-body" id="dashboardDevices"></div></div>
+<div class="panel"><div class="panel-head"><h3>Recent Backups</h3><p>The five most recent configuration backups.</p></div><div class="panel-body" id="dashboardBackups"></div></div>
 <div class="panel"><div class="panel-head"><h3>Cloud Integrations</h3><p>Upcoming cloud storage and authentication features.</p></div><div class="panel-body"><div class="row"><div><div class="row-title">Google Drive Backup <span class="badge warn">COMING SOON</span></div><div class="meta">Cloud backup sync, OAuth 2.0 and future restore workflow.</div></div><button class="btn btn-sm" onclick="showPage('cloud')">View Roadmap</button></div></div></div>
 
 <div class="panel"><div class="panel-head"><h3>Advanced Roadmap</h3><p>Planned capabilities for future NCM releases.</p></div>
@@ -336,7 +337,6 @@ function parseCSV(text){const rows=[];let row=[],cell="",quoted=false;for(let i=
 async function importCSV(e){const file=e.target.files?.[0];e.target.value="";if(!file)return;try{const rows=parseCSV(await file.text());if(rows.length<2){toast("CSV is empty","err");return}const headers=rows[0].map(x=>String(x).trim().toLowerCase()),required=["hostname","management_ip","vendor","username","password"],missing=required.filter(x=>!headers.includes(x));if(missing.length){toast("Missing columns: "+missing.join(", "),"err");return}let success=0,failed=0,errors=[];for(let i=1;i<rows.length;i++){const obj={};headers.forEach((h,j)=>obj[h]=(rows[i][j]??"").trim());const p={hostname:obj.hostname,management_ip:obj.management_ip,vendor:(obj.vendor||"huawei").toLowerCase(),model:obj.model||null,username:obj.username,password:obj.password,ssh_port:parseInt(obj.ssh_port||"22",10),site:obj.site||"DEFAULT",enabled:obj.enabled===""?true:!["false","0","no","disabled"].includes(obj.enabled.toLowerCase())};if(!p.hostname||!p.management_ip||!p.username||!p.password){failed++;errors.push(`Row ${i+1}: required value missing`);continue}try{const r=await api("/api/devices/",{method:"POST",body:JSON.stringify(p)}),d=await r.json();if(r.ok)success++;else{failed++;errors.push(`Row ${i+1}: ${d.detail||"Import failed"}`)}}catch(err){failed++;errors.push(`Row ${i+1}: request failed`)}}await loadAll();$("csvResult").innerHTML=`<b>Import completed</b><p style="margin:8px 0">Successful: <b style="color:var(--green)">${success}</b><br>Failed: <b style="color:var(--red)">${failed}</b></p>${errors.length?`<div style="text-align:left;color:var(--red);font-size:11px">${errors.map(esc).join("<br>")}</div>`:"<div class='message success'>All rows imported successfully.</div>"}`;$("csvModal").classList.remove("hidden")}catch(err){toast("Unable to read CSV file","err")}}
 function closeCSVModal(){$("csvModal").classList.add("hidden")}
 document.addEventListener("keydown",e=>{if(e.key==="Escape")["userModal","editModal","viewerModal","scheduleModal","csvModal"].forEach(id=>$(id).classList.add("hidden"))});
-async function validateSession(){if(!token){showLogin();return}try{const r=await api("/api/auth/me");if(!r.ok)throw Error();currentUser=await r.json();showApp();await loadAll()}catch(e){localStorage.removeItem("ncm_token");token="";showLogin()}}
 // Single sign-on hands the token back in the fragment: never sent to a server,
 // never in an access log, never in a Referer. Take it, store it exactly as a
 // local login would, and clear it out of the address bar before anything else
@@ -346,7 +346,6 @@ async function validateSession(){if(!token){showLogin();return}try{const r=await
   if (!found) return;
   token = decodeURIComponent(found[1]);
   localStorage.setItem("ncm_token", token);
-  sessionStorage.removeItem("ncm_sso_attempted_at");
   history.replaceState(null, "", location.pathname + location.search);
 })();
 
@@ -387,18 +386,31 @@ ssoAvailable = __SSO_ENABLED__;
     $("localHint").style.display = "block";
   }
 
+  // The try covers the session check and nothing else. It used to wrap the
+  // rendering too, which meant any error while drawing the page was read as
+  // "your session is dead": the token was deleted, the provider was asked for a
+  // new one, and the same error threw again on the next load -- a sign-in loop
+  // built entirely out of a working sign-in.
+  let session = null;
   if (token) {
     try {
       const r = await api("/api/auth/me");
-      if (r.ok) {
-        currentUser = await r.json();
-        showApp();
-        await loadAll();
-        return;                       // a working session; nothing else to do
-      }
-    } catch (e) { /* unreachable or refused; treated the same as no session */ }
-    localStorage.removeItem("ncm_token");
-    token = "";
+      if (r.ok) session = await r.json();
+    } catch (e) { /* unreachable; treated the same as no session */ }
+    if (!session) {
+      localStorage.removeItem("ncm_token");
+      token = "";
+    }
+  }
+
+  if (session) {
+    // Confirmed working, which is the only thing that should clear the loop
+    // guard. Receiving a token is not the same as having a session.
+    sessionStorage.removeItem("ncm_sso_attempted_at");
+    currentUser = session;
+    showApp();
+    await loadAll();
+    return;
   }
 
   // No usable session. The provider is the way in, unless we have been asked

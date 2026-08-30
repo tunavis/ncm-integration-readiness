@@ -55,9 +55,15 @@ Modifications in this fork
    to the page with a reason and does not redirect again, so a broken provider
    cannot become a loop.
 
-5. Packaging: a Dockerfile and a compose file (see below).
+5. A missing dashboard element (`backend/app/web/index.html`).
+   `renderDashboard()` writes into `#dashboardBackups`, which the page did not
+   contain, so it threw partway through and everything after it -- recent
+   backups, cloud integrations, the roadmap -- never rendered. The panel is
+   restored. Worth offering upstream.
 
-6. This NOTICE and the LICENSE described above.
+6. Packaging: a Dockerfile and a compose file (see below).
+
+7. This NOTICE and the LICENSE described above.
 
 
 Deliberately not changed
