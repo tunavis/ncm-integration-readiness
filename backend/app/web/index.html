@@ -245,8 +245,7 @@ input:focus,select:focus{border-color:var(--color-focus);box-shadow:0 0 0 3px va
 .message{font-size:12px;margin:10px 0}.message.error{color:var(--color-danger)}.message.success{color:var(--color-success)}
 .login{min-height:100vh;display:grid;grid-template-columns:1fr 1fr}.login-left{display:grid;place-items:center;padding:30px}
 .login-box{width:min(430px,100%);background:var(--color-surface);border:1px solid var(--color-border);border-radius:20px;padding:34px;box-shadow:var(--shadow-md)}
-.logo,.brand-mark{background:linear-gradient(135deg,#3b82f6,#1d4ed8);color:#fff;display:grid;place-items:center;font-weight:800}
-.logo{width:52px;height:52px;border-radius:15px;font-size:23px}.login-box h1{margin:20px 0 6px;font-size:27px}.login-box p{color:var(--color-text-muted);font-size:13px}
+.login-box h1{margin:20px 0 6px;font-size:27px}.login-box p{color:var(--color-text-muted);font-size:13px}
 .field{margin:15px 0}.field label,.field2 label,.modal-box label{display:block;font-size:11px;font-weight:700;color:var(--color-text-muted);margin-bottom:6px}
 .login-submit{width:100%;height:44px}.login-right{background:linear-gradient(145deg,#0f172a,#172554);color:#fff;display:flex;align-items:center;padding:70px}
 .login-right h2{font-size:38px;max-width:560px;line-height:1.1}.login-right p{color:#cbd5e1;max-width:560px;line-height:1.7}
@@ -257,14 +256,17 @@ input:focus,select:focus{border-color:var(--color-focus);box-shadow:0 0 0 3px va
 .app{min-height:100vh;display:grid;grid-template-columns:236px 1fr}
 .sidebar{background:var(--color-sidebar);color:var(--color-sidebar-text);display:flex;flex-direction:column;min-height:100vh;border-right:1px solid var(--color-sidebar-border)}
 .side-brand{height:70px;padding:0 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--color-sidebar-border)}
-.side-logo{height:34px;width:auto;flex:none}
-/* The wordmark is dark navy, so on the dark sidebar it would be invisible.
+/* The wordmark is dark navy, so on any dark surface it would be invisible.
    Flattened to white rather than shipping a second file: brightness(0) makes
-   every pixel black, invert then makes it white, and transparency is kept. */
-:root[data-theme='dark'] .side-logo{filter:brightness(0) invert(1);opacity:.92}
+   every pixel black, invert then makes it white, and transparency is kept.
+   One rule for every placement, so a new one cannot be added and forgotten. */
+.gito-logo{width:auto;display:block}
+:root[data-theme='dark'] .gito-logo{filter:brightness(0) invert(1);opacity:.92}
 @media (prefers-color-scheme: dark){
-  :root:not([data-theme='light']) .side-logo{filter:brightness(0) invert(1);opacity:.92}
+  :root:not([data-theme='light']) .gito-logo{filter:brightness(0) invert(1);opacity:.92}
 }
+.side-logo{height:34px;flex:none}
+.login-logo{height:44px}
 .side-app{padding-left:12px;border-left:1px solid var(--color-sidebar-border)}
 .side-app b{display:block;font-size:9px;font-weight:700;line-height:1.55;letter-spacing:.14em;text-transform:uppercase;color:var(--color-sidebar-muted)}
 .nav{padding:14px 10px}.nav-label{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--color-sidebar-muted);padding:8px}.nav button{display:block;width:100%;border:0;background:transparent;color:var(--color-sidebar-muted);text-align:left;padding:11px 12px;border-radius:9px;margin:2px 0;font-size:12.5px;font-weight:500}.nav button:hover{background:var(--color-sidebar-hover);color:var(--color-sidebar-text)}.nav button.active{background:var(--color-sidebar-active);color:var(--color-sidebar-active-text);font-weight:700;box-shadow:inset 3px 0 var(--color-sidebar-active-text)}
@@ -295,7 +297,7 @@ input:focus,select:focus{border-color:var(--color-focus);box-shadow:0 0 0 3px va
 
 <section id="loginScreen" class="login hidden">
   <div class="login-left"><div class="login-box">
-    <div class="logo">N</div>
+    <img class="gito-logo login-logo" src="/static/gito-logo.png" alt="Gito IT Solutions" width="687" height="356">
     <h1>Welcome back</h1><p>Sign in to Network Config Manager</p>
     <form id="loginForm">
       <div class="field"><label>Username</label><input id="loginUsername" autocomplete="username" required></div>
@@ -322,7 +324,7 @@ input:focus,select:focus{border-color:var(--color-focus);box-shadow:0 0 0 3px va
 
 <section id="appShell" class="app hidden">
 <aside class="sidebar">
-  <div class="side-brand"><img class="side-logo" src="/static/gito-logo.png" alt="Gito IT Solutions" width="687" height="356"><div class="side-app"><b>Network</b><b>Config Manager</b></div></div>
+  <div class="side-brand"><img class="gito-logo side-logo" src="/static/gito-logo.png" alt="Gito IT Solutions" width="687" height="356"><div class="side-app"><b>Network</b><b>Config Manager</b></div></div>
   <nav class="nav">
     <div class="nav-label">Operations</div>
     <button class="active" data-page="dashboard" onclick="showPage('dashboard')">▦ <span class="txt">Dashboard</span></button>
