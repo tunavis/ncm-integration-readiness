@@ -193,5 +193,141 @@ class TestProvisioning:
         assert db.query(User).count() == 0
 
 
+class TestGroupRoles:
+    """Group membership is the only thing in a token that moves entitlement.
+
+    The half worth testing hardest is removal. A mapping that only ever promotes
+    is the same stale-role bug in a nicer shape: somebody who leaves the network
+    team keeps administering it until a human notices.
+    """
+
+    MAP = (
+        "platform-administrators=super_admin,"
+        "network-administrators=admin,"
+        "noc-operators=operator"
+    )
+
+    @pytest.fixture
+    def mapped(self, configured, monkeypatch):
+        monkeypatch.setattr(settings, "oidc_group_roles", self.MAP)
+        return configured
+
+    def test_a_mapped_group_earns_its_role(self, mapped, db):
+        user = oidc.resolve_user(
+            db, {"preferred_username": "mark", "groups": ["platform-administrators"]}
+        )
+
+        assert user.role == "super_admin"
+
+    def test_the_most_privileged_group_wins(self, mapped, db):
+        """Adding a group must never take access away."""
+        user = oidc.resolve_user(
+            db,
+            {"preferred_username": "mark", "groups": ["noc-operators", "network-administrators"]},
+        )
+
+        assert user.role == "admin"
+
+    def test_keycloaks_group_paths_are_accepted(self, mapped, db):
+        """Keycloak writes "/network-administrators"; nobody configures the slash."""
+        user = oidc.resolve_user(
+            db, {"preferred_username": "mark", "groups": ["/network-administrators"]}
+        )
+
+        assert user.role == "admin"
+
+    def test_a_single_group_string_is_accepted(self, mapped, db):
+        user = oidc.resolve_user(
+            db, {"preferred_username": "mark", "groups": "platform-administrators"}
+        )
+
+        assert user.role == "super_admin"
+
+    def test_an_unmapped_group_gets_the_default(self, mapped, db):
+        user = oidc.resolve_user(
+            db, {"preferred_username": "contractor", "groups": ["employees"]}
+        )
+
+        assert user.role == "viewer"
+
+    def test_no_groups_at_all_gets_the_default(self, mapped, db):
+        assert oidc.resolve_user(db, {"preferred_username": "nobody"}).role == "viewer"
+
+    def test_a_role_claim_still_grants_nothing(self, mapped, db):
+        """Only groups are read. A role in someone else's token is not ours."""
+        user = oidc.resolve_user(
+            db, {"preferred_username": "sneaky", "role": "super_admin", "groups": ["employees"]}
+        )
+
+        assert user.role == "viewer"
+
+    def test_a_promotion_in_the_directory_arrives(self, mapped, db):
+        db.add(User(username="mark", password_hash="x", role="viewer", is_active=True))
+        db.commit()
+
+        user = oidc.resolve_user(
+            db, {"preferred_username": "mark", "groups": ["platform-administrators"]}
+        )
+
+        assert user.role == "super_admin"
+        assert db.query(User).count() == 1, "the existing row is updated, not duplicated"
+
+    def test_a_removal_from_the_directory_also_arrives(self, mapped, db):
+        """The half that matters: losing the group loses the access."""
+        db.add(User(username="mark", password_hash="x", role="super_admin", is_active=True))
+        db.commit()
+
+        user = oidc.resolve_user(db, {"preferred_username": "mark", "groups": ["employees"]})
+
+        assert user.role == "viewer"
+
+    def test_a_disabled_user_is_still_refused(self, mapped, db):
+        """Being in the most privileged group does not reopen a closed account."""
+        db.add(User(username="gone", password_hash="x", role="viewer", is_active=False))
+        db.commit()
+
+        assert (
+            oidc.resolve_user(
+                db, {"preferred_username": "gone", "groups": ["platform-administrators"]}
+            )
+            is None
+        )
+
+    def test_a_mapping_naming_an_unknown_role_is_dropped(self, configured, db, monkeypatch):
+        """One bad pair costs that group its mapping, not everyone their sign-in."""
+        monkeypatch.setattr(
+            settings, "oidc_group_roles", "good-group=admin,typo-group=administrater"
+        )
+
+        assert oidc.resolve_user(db, {"preferred_username": "a", "groups": ["typo-group"]}).role == "viewer"
+        assert oidc.resolve_user(db, {"preferred_username": "b", "groups": ["good-group"]}).role == "admin"
+
+    def test_without_a_mapping_an_existing_role_is_untouched(self, configured, db):
+        """Unset is the previous behaviour, so upgrading changes nothing until
+        someone opts in -- including for a role set by hand here."""
+        db.add(User(username="promoted", password_hash="x", role="admin", is_active=True))
+        db.commit()
+
+        user = oidc.resolve_user(
+            db, {"preferred_username": "promoted", "groups": ["platform-administrators"]}
+        )
+
+        assert user.role == "admin"
+
+    def test_a_custom_groups_claim_is_honoured(self, mapped, db, monkeypatch):
+        monkeypatch.setattr(settings, "oidc_groups_claim", "memberOf")
+
+        user = oidc.resolve_user(
+            db,
+            {
+                "preferred_username": "mark",
+                "groups": ["platform-administrators"],
+                "memberOf": ["noc-operators"],
+            },
+        )
+
+        assert user.role == "operator", "the configured claim is read, not `groups`"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

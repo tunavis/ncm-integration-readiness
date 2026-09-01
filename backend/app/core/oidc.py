@@ -15,10 +15,16 @@ Three rules keep this from becoming a hole in the front door:
 * **Issuer and audience are both required and both checked.** A signature proves
   who minted a token, not who it was minted for. Without the audience check, a
   token issued to any other client of the same realm would open this API.
-* **A provisioned user gets the least privilege there is.** Somebody arriving on
-  a valid token has proven who they are and nothing about what they may do, so
-  they arrive as a `viewer` unless configured otherwise. Roles are granted here,
-  by an administrator, not asserted by a claim in someone else's token.
+* **Entitlement is never read from the token.** Somebody arriving on a valid
+  token has proven who they are and nothing about what they may do. Only *group
+  membership* is read, and only as a lookup into `oidc_group_roles`, which is
+  configured here: the directory is authoritative for which groups someone is
+  in, this application for what a group means. A role claim in someone else's
+  token is ignored. Nobody matching a mapped group arrives as a `viewer`.
+
+  That mapping is recomputed on **every** sign-in, so a change of team reaches
+  this application on the next login -- a removal as well as a promotion, which
+  is the half that matters.
 """
 
 import json
@@ -202,6 +208,59 @@ def _decode(
     return None
 
 
+#: Most privileged first. Used to resolve someone who is in several mapped
+#: groups, so that adding a group can never quietly remove access.
+ROLE_PRECEDENCE = ("super_admin", "admin", "operator", "viewer")
+
+
+def _configured_group_roles() -> dict[str, str]:
+    """Parse ``oidc_group_roles``: ``group=role`` pairs separated by commas.
+
+    A pair naming a role this application does not have is dropped rather than
+    raising. A typo in configuration should cost that one group its mapping,
+    not stop every sign-in.
+    """
+    mapping: dict[str, str] = {}
+    for pair in settings.oidc_group_roles.split(","):
+        pair = pair.strip()
+        if not pair or "=" not in pair:
+            continue
+        group, _, role = pair.partition("=")
+        group, role = group.strip(), role.strip()
+        if not group or role not in ROLE_PERMISSIONS:
+            logger.warning("ignoring group mapping %r: no such role %r", group, role)
+            continue
+        mapping[group] = role
+    return mapping
+
+
+def role_for_groups(claims: dict) -> str:
+    """The role this token's group memberships earn, or the default.
+
+    Only *groups* are read from the token, never a role. The directory is
+    authoritative for which groups someone is in; this application is
+    authoritative for what a group means here. A provider able to assert its own
+    role in this application would be asserting entitlement rather than
+    identity, which is the thing the rest of this module is careful to prevent.
+    """
+    mapping = _configured_group_roles()
+    if not mapping:
+        return settings.oidc_default_role
+
+    raw = claims.get(settings.oidc_groups_claim) or []
+    if isinstance(raw, str):
+        raw = [raw]
+    # Keycloak writes group paths ("/network-administrators"); the leading
+    # slash is not part of the name anyone configures.
+    groups = {str(g).strip().lstrip("/") for g in raw if str(g).strip()}
+
+    earned = {mapping[g] for g in groups if g in mapping}
+    for role in ROLE_PRECEDENCE:
+        if role in earned:
+            return role
+    return settings.oidc_default_role
+
+
 def resolve_user(db, claims: dict) -> User | None:
     """Find the NCM user a validated token refers to, creating one on first sight.
 
@@ -212,16 +271,32 @@ def resolve_user(db, claims: dict) -> User | None:
     if not username:
         return None
 
+    role = role_for_groups(claims)
+
     user = db.query(User).filter(User.username == username).first()
     if user:
-        return user if user.is_active else None
+        if not user.is_active:
+            return None
+        # Recomputed on every sign-in, not just the first. A role set once at
+        # creation goes stale the moment someone changes team: a promotion in
+        # the directory never arrives, and -- worse -- neither does a removal.
+        #
+        # This does mean a role set by hand here is overwritten on the next
+        # single sign-on, which is the deliberate trade: with `oidc_group_roles`
+        # configured, the directory is the authority for anyone who arrives
+        # through it. Leave it unset and nothing below changes an existing user.
+        if _configured_group_roles() and user.role != role:
+            logger.info("role for %s follows the directory: %s -> %s", username, user.role, role)
+            user.role = role
+            db.commit()
+            db.refresh(user)
+        return user
 
     # An unusable but well-formed hash: nobody knows this password, and
     # `verify_password` returns False rather than raising on a malformed value.
     # This account can only ever be reached through the identity provider.
-    role = settings.oidc_default_role
     if role not in ROLE_PERMISSIONS:
-        # A misconfigured role becomes the least-privileged one. The safe
+        # A misconfigured default becomes the least-privileged role. The safe
         # direction to fail, and `viewer` is the documented default.
         role = "viewer"
 
