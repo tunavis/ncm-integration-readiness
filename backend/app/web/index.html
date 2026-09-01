@@ -5,79 +5,285 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>Network Config Manager</title>
+<script>
+/* Before first paint: a stored choice wins, and no stored choice leaves
+   data-theme unset so the stylesheet follows the operating system. Runs here
+   rather than with the rest of the JS because a theme applied after render is
+   a visible flash of the wrong one. */
+(function(){var t=localStorage.getItem("ncm_theme");if(t)document.documentElement.dataset.theme=t})();
+/* If this load can only end at the identity provider, go now -- before the
+   login form has a chance to paint. Every input to that decision is in storage
+   or the URL; only validating a token we already hold needs the network, and
+   that case deliberately falls through to boot(). This is what stops the
+   flash of a password box on the way through single sign-on. */
+(function(){
+  if (!__SSO_ENABLED__) return;
+  var q = new URLSearchParams(location.search);
+  if (q.has("local") || q.get("sso_error")) return;   /* asked for the form */
+  if (localStorage.getItem("ncm_token")) return;      /* may be live; boot() checks */
+  var last = Number(sessionStorage.getItem("ncm_sso_attempted_at") || 0);
+  if (Date.now() - last < 20000) return;              /* the loop guard */
+  sessionStorage.setItem("ncm_sso_attempted_at", String(Date.now()));
+  location.replace("/auth/sso/login");
+})();
+</script>
 <style>
-:root{
-  --bg:#f3f6fa;--surface:#fff;--surface2:#f8fafc;--line:#e2e8f0;
-  --text:#0f172a;--muted:#64748b;--blue:#2563eb;--blue-soft:#eff6ff;
-  --green:#16a34a;--green-soft:#f0fdf4;--red:#dc2626;--red-soft:#fff1f2;
-  --amber:#d97706;--nav:#0f172a;--nav2:#111827;
-  --shadow:0 8px 28px rgba(15,23,42,.06);--radius:14px
+/* Design tokens -- shared Company OS standard.
+   COPIED VERBATIM from the Company OS web shell (apps/web/src/app/tokens.css).
+   Do not edit these values here: change them at the source and re-copy, or the
+   two drift apart. This application serves one static file with no bundler,
+   which is why it holds a copy rather than an import.
+   Three themes, not two: bare :root is light, the media query follows the
+   operating system for anyone who has not chosen, and [data-theme] wins over
+   both so an explicit choice is honoured either way. */
+:root {
+  /* --- surface and text ------------------------------------------------- */
+  --color-canvas: #f4f7fb;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-surface-sunken: #eef2f8;
+  --color-border: #d4dff0;
+  --color-border-strong: #c8d6ec;
+
+  --color-text: #0a1628;
+  --color-text-muted: #4a6080;
+  /* 4.80:1 on surface. #7c8592 read better but measured 3.73:1, under AA,
+     and this tone carries real text -- launcher descriptions, nav labels. */
+  --color-text-subtle: #556f90;
+  --color-text-inverse: #ffffff;
+
+  /* --- brand ------------------------------------------------------------ */
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-subtle: #eff6ff;
+  --color-focus: #2563eb;
+
+  /* --- sidebar ------------------------------------------------------------
+     The sidebar is part of the shared look, not one application's furniture:
+     it is theme-aware, light in light mode and near-black in dark, which is
+     the single biggest thing that makes two applications read as one product.
+     Its own tokens because it never sits on the canvas -- text and hover
+     states there are measured against the sidebar, not the page. */
+  --color-sidebar: #f0f4fa;
+  --color-sidebar-text: #0a1628;
+  --color-sidebar-muted: #4a6080;
+  --color-sidebar-active: rgb(37 99 235 / 8%);
+  --color-sidebar-active-text: #2563eb;
+  --color-sidebar-hover: rgb(10 22 40 / 5%);
+  --color-sidebar-border: rgb(10 22 40 / 8%);
+
+  /* --- status ----------------------------------------------------------- */
+  /* 4.90:1 on --color-success-subtle. #1a7f4b measured 4.41:1, which fails
+     AA for the small badge text that pairing is for. */
+  --color-success: #187745;
+  --color-success-subtle: #e4f4ea;
+  --color-warning: #96650a;
+  --color-warning-subtle: #fdf3dd;
+  --color-danger: #b3261e;
+  --color-danger-subtle: #fbe9e7;
+  --color-info: #2563eb;
+  --color-info-subtle: #eff6ff;
+
+  /* --- spacing ---------------------------------------------------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  /* --- radius and elevation --------------------------------------------- */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 6%);
+  --shadow-md: 0 4px 12px rgb(16 24 40 / 8%);
+
+  /* --- type ------------------------------------------------------------- */
+  /* Plus Jakarta Sans and JetBrains Mono are the house faces, with a full
+     system fallback after each. Deliberately NOT loaded from a font CDN: that
+     is an external request on every page load, which the security architecture
+     does not allow by default. Until the files are self-hosted, these render
+     in the fallback -- correct, just not the house face. */
+  --font-sans:
+    'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
 }
-html[data-theme="dark"]{
-  --bg:#0b1120;--surface:#111827;--surface2:#172033;--line:#263247;
-  --text:#e5e7eb;--muted:#94a3b8;--blue:#60a5fa;--blue-soft:#172554;
-  --green:#4ade80;--green-soft:#052e16;--red:#fb7185;--red-soft:#3f0d18;
-  --amber:#fbbf24;--nav:#070b14;--nav2:#0b1220;
+
+/* Viewers who have expressed no preference follow the operating system. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --color-canvas: #070c16;
+    --color-surface: #0f1928;
+    --color-surface-raised: #152035;
+    --color-surface-sunken: #111b2e;
+    --color-border: #1e2d45;
+    --color-border-strong: #2c4066;
+
+    --color-text: #e8f0fe;
+    --color-text-muted: #7c9bc2;
+    --color-text-subtle: #6d8bb0;
+    --color-text-inverse: #070c16;
+
+    --color-accent: #60a5fa;
+    --color-accent-hover: #93c5fd;
+    --color-accent-subtle: #172554;
+    --color-focus: #93c5fd;
+
+    --color-success: #5cc98d;
+    --color-success-subtle: #14291d;
+    --color-warning: #e0b355;
+    --color-warning-subtle: #2b2213;
+    --color-danger: #f28b82;
+    --color-danger-subtle: #2e1817;
+    --color-info: #60a5fa;
+    --color-info-subtle: #172554;
+
+    --color-sidebar: #040810;
+    --color-sidebar-text: #e8f0fe;
+    --color-sidebar-muted: #7c9bc2;
+    --color-sidebar-active: rgb(59 130 246 / 16%);
+    --color-sidebar-active-text: #93c5fd;
+    --color-sidebar-hover: rgb(255 255 255 / 6%);
+    --color-sidebar-border: rgb(59 130 246 / 12%);
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-md: 0 4px 12px rgb(0 0 0 / 45%);
+  }
 }
+
+/* An explicit choice wins over the system preference, in both directions. */
+:root[data-theme='dark'] {
+  --color-canvas: #070c16;
+  --color-surface: #0f1928;
+  --color-surface-raised: #152035;
+  --color-surface-sunken: #111b2e;
+  --color-border: #1e2d45;
+  --color-border-strong: #2c4066;
+
+  --color-text: #e8f0fe;
+  --color-text-muted: #7c9bc2;
+  --color-text-subtle: #6d8bb0;
+  --color-text-inverse: #070c16;
+
+  --color-accent: #60a5fa;
+  --color-accent-hover: #93c5fd;
+  --color-accent-subtle: #172554;
+  --color-focus: #93c5fd;
+
+  --color-success: #5cc98d;
+  --color-success-subtle: #14291d;
+  --color-warning: #e0b355;
+  --color-warning-subtle: #2b2213;
+  --color-danger: #f28b82;
+  --color-danger-subtle: #2e1817;
+  --color-info: #60a5fa;
+  --color-info-subtle: #172554;
+
+  --color-sidebar: #040810;
+  --color-sidebar-text: #e8f0fe;
+  --color-sidebar-muted: #7c9bc2;
+  --color-sidebar-active: rgb(59 130 246 / 16%);
+  --color-sidebar-active-text: #93c5fd;
+  --color-sidebar-hover: rgb(255 255 255 / 6%);
+  --color-sidebar-border: rgb(59 130 246 / 12%);
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 45%);
+}
+/* Literal colours below this line are deliberate and must NOT be tokenised.
+   Three groups, all of which sit on their own fixed background rather than on
+   the themed page: the sidebar and login panel chrome (translucent whites and
+   slate greys over a dark gradient), the diff and config viewers (terminal
+   colours, which stay dark in both themes so a config is always legible), and
+   the modal backdrop. Everything else uses a token. */
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+body{margin:0;background:var(--color-canvas);color:var(--color-text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 button,input,select{font:inherit}button{cursor:pointer}.hidden{display:none!important}
-.cloud-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.cloud-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:var(--shadow);position:relative;overflow:hidden}.cloud-card.soon{opacity:.96}.cloud-icon{width:46px;height:46px;border-radius:12px;background:var(--blue-soft);color:var(--blue);display:grid;place-items:center;font-size:22px;font-weight:800;margin-bottom:14px}.cloud-card h3{margin:0 0 6px;font-size:15px}.cloud-card p{margin:0;color:var(--muted);font-size:11px;line-height:1.6}.cloud-list{margin:14px 0 0;padding-left:18px;color:var(--muted);font-size:11px;line-height:1.8}.coming-badge{position:absolute;top:16px;right:16px;border-radius:999px;padding:5px 9px;background:var(--amber-soft);color:var(--amber);font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}.cloud-note{margin-top:16px;padding:14px 16px;border:1px dashed var(--line);border-radius:12px;background:var(--surface2);color:var(--muted);font-size:11px;line-height:1.6}.cloud-note b{color:var(--text)}
+.cloud-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.cloud-card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:14px;padding:20px;box-shadow:var(--shadow-md);position:relative;overflow:hidden}.cloud-card.soon{opacity:.96}.cloud-icon{width:46px;height:46px;border-radius:12px;background:var(--color-accent-subtle);color:var(--color-accent);display:grid;place-items:center;font-size:22px;font-weight:800;margin-bottom:14px}.cloud-card h3{margin:0 0 6px;font-size:15px}.cloud-card p{margin:0;color:var(--color-text-muted);font-size:11px;line-height:1.6}.cloud-list{margin:14px 0 0;padding-left:18px;color:var(--color-text-muted);font-size:11px;line-height:1.8}.coming-badge{position:absolute;top:16px;right:16px;border-radius:999px;padding:5px 9px;background:var(--color-warning-subtle);color:var(--color-warning);font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}.cloud-note{margin-top:16px;padding:14px 16px;border:1px dashed var(--color-border);border-radius:12px;background:var(--color-surface-sunken);color:var(--color-text-muted);font-size:11px;line-height:1.6}.cloud-note b{color:var(--color-text)}
 
 
 .roadmap-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-.roadmap-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:var(--shadow);position:relative;overflow:hidden}
-.roadmap-card:before{content:"";position:absolute;left:0;top:0;right:0;height:3px;background:linear-gradient(90deg,var(--blue),#8b5cf6)}
-.roadmap-icon{width:44px;height:44px;border-radius:12px;background:var(--blue-soft);color:var(--blue);display:grid;place-items:center;font-size:21px;font-weight:800;margin-bottom:12px}
+.roadmap-card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:14px;padding:18px;box-shadow:var(--shadow-md);position:relative;overflow:hidden}
+.roadmap-card:before{content:"";position:absolute;left:0;top:0;right:0;height:3px;background:linear-gradient(90deg,var(--color-accent),#8b5cf6)}
+.roadmap-icon{width:44px;height:44px;border-radius:12px;background:var(--color-accent-subtle);color:var(--color-accent);display:grid;place-items:center;font-size:21px;font-weight:800;margin-bottom:12px}
 .roadmap-card h3{margin:0 0 5px;font-size:14px}
-.roadmap-card p{margin:0;color:var(--muted);font-size:11px;line-height:1.55}
-.roadmap-card ul{margin:12px 0 0;padding-left:17px;color:var(--muted);font-size:10px;line-height:1.75}
-.roadmap-badge{position:absolute;top:15px;right:15px;border-radius:999px;padding:5px 8px;background:var(--amber-soft);color:var(--amber);font-size:8px;font-weight:800;letter-spacing:.4px}
-.roadmap-status{display:flex;gap:8px;align-items:center;margin-top:14px;color:var(--muted);font-size:10px}
-.roadmap-dot{width:7px;height:7px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 4px rgba(217,119,6,.10)}
-.future-panel{margin-top:16px;padding:16px;border:1px dashed var(--line);border-radius:14px;background:var(--surface2)}
+.roadmap-card p{margin:0;color:var(--color-text-muted);font-size:11px;line-height:1.55}
+.roadmap-card ul{margin:12px 0 0;padding-left:17px;color:var(--color-text-muted);font-size:10px;line-height:1.75}
+.roadmap-badge{position:absolute;top:15px;right:15px;border-radius:999px;padding:5px 8px;background:var(--color-warning-subtle);color:var(--color-warning);font-size:8px;font-weight:800;letter-spacing:.4px}
+.roadmap-status{display:flex;gap:8px;align-items:center;margin-top:14px;color:var(--color-text-muted);font-size:10px}
+.roadmap-dot{width:7px;height:7px;border-radius:50%;background:var(--color-warning);box-shadow:0 0 0 4px var(--color-warning-subtle)}
+.future-panel{margin-top:16px;padding:16px;border:1px dashed var(--color-border);border-radius:14px;background:var(--color-surface-sunken)}
 .future-panel h3{margin:0 0 6px;font-size:14px}
-.future-panel p{margin:0;color:var(--muted);font-size:11px;line-height:1.6}
+.future-panel p{margin:0;color:var(--color-text-muted);font-size:11px;line-height:1.6}
 @media(max-width:1100px){.roadmap-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:760px){.roadmap-grid{grid-template-columns:1fr}}
 
-.btn{height:38px;border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:9px;padding:0 13px;font-size:12px;font-weight:650}
-.btn-primary{background:var(--blue);border-color:var(--blue);color:#fff}
-.btn-success{background:var(--green-soft);border-color:#bbf7d0;color:var(--green)}
-.btn-danger{background:var(--red-soft);border-color:#fecdd3;color:var(--red)}
+.btn{height:38px;border:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text);border-radius:9px;padding:0 13px;font-size:12px;font-weight:650}
+.btn-primary{background:var(--color-accent);border-color:var(--color-accent);color:var(--color-text-inverse)}
+.btn-success{background:var(--color-success-subtle);border-color:var(--color-success);color:var(--color-success)}
+.btn-danger{background:var(--color-danger-subtle);border-color:var(--color-danger);color:var(--color-danger)}
 .btn-sm{height:33px;padding:0 10px;font-size:11px}
-input,select{width:100%;height:42px;border:1px solid var(--line);border-radius:9px;padding:0 12px;background:var(--surface);color:var(--text);outline:none}
-input:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
-.message{font-size:12px;margin:10px 0}.message.error{color:var(--red)}.message.success{color:var(--green)}
+input,select{width:100%;height:42px;border:1px solid var(--color-border);border-radius:9px;padding:0 12px;background:var(--color-surface);color:var(--color-text);outline:none}
+input:focus,select:focus{border-color:var(--color-focus);box-shadow:0 0 0 3px var(--color-accent-subtle)}
+.message{font-size:12px;margin:10px 0}.message.error{color:var(--color-danger)}.message.success{color:var(--color-success)}
 .login{min-height:100vh;display:grid;grid-template-columns:1fr 1fr}.login-left{display:grid;place-items:center;padding:30px}
-.login-box{width:min(430px,100%);background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:34px;box-shadow:var(--shadow)}
+.login-box{width:min(430px,100%);background:var(--color-surface);border:1px solid var(--color-border);border-radius:20px;padding:34px;box-shadow:var(--shadow-md)}
 .logo,.brand-mark{background:linear-gradient(135deg,#3b82f6,#1d4ed8);color:#fff;display:grid;place-items:center;font-weight:800}
-.logo{width:52px;height:52px;border-radius:15px;font-size:23px}.login-box h1{margin:20px 0 6px;font-size:27px}.login-box p{color:var(--muted);font-size:13px}
-.field{margin:15px 0}.field label,.field2 label,.modal-box label{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px}
+.logo{width:52px;height:52px;border-radius:15px;font-size:23px}.login-box h1{margin:20px 0 6px;font-size:27px}.login-box p{color:var(--color-text-muted);font-size:13px}
+.field{margin:15px 0}.field label,.field2 label,.modal-box label{display:block;font-size:11px;font-weight:700;color:var(--color-text-muted);margin-bottom:6px}
 .login-submit{width:100%;height:44px}.login-right{background:linear-gradient(145deg,#0f172a,#172554);color:#fff;display:flex;align-items:center;padding:70px}
 .login-right h2{font-size:38px;max-width:560px;line-height:1.1}.login-right p{color:#cbd5e1;max-width:560px;line-height:1.7}
 .features{display:grid;grid-template-columns:1fr 1fr;gap:12px}.feature{border:1px solid #ffffff1c;background:#ffffff0b;padding:14px;border-radius:11px}.feature span{display:block;color:#94a3b8;font-size:11px;margin-top:4px}
-.app{min-height:100vh;display:grid;grid-template-columns:218px 1fr}.sidebar{background:linear-gradient(180deg,var(--nav),var(--nav2));color:#fff;display:flex;flex-direction:column;min-height:100vh}
-.side-brand{height:70px;padding:0 18px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #ffffff12}.side-mark{width:36px;height:36px;border-radius:11px;background:#2563eb;display:grid;place-items:center;font-weight:800}.side-brand b{display:block}.side-brand span{display:block;color:#94a3b8;font-size:9px;margin-top:2px}
-.nav{padding:14px 10px}.nav-label{font-size:9px;text-transform:uppercase;color:#64748b;padding:8px}.nav button{display:block;width:100%;border:0;background:transparent;color:#cbd5e1;text-align:left;padding:11px 12px;border-radius:9px;margin:2px 0;font-size:12px}.nav button:hover,.nav button.active{background:#ffffff10;color:#fff}.nav button.active{box-shadow:inset 3px 0 #60a5fa}
-.side-bottom{margin-top:auto;padding:15px;border-top:1px solid #ffffff12}.user-mini{display:flex;gap:10px;align-items:center}.avatar{width:34px;height:34px;border-radius:10px;background:#2563eb;display:grid;place-items:center;font-weight:800;font-size:11px}.user-mini b{display:block;font-size:11px}.user-mini span{display:block;color:#94a3b8;font-size:9px;margin-top:2px}.logout-btn{width:100%;margin-top:12px;height:34px;border:1px solid #ffffff18;background:#ffffff08;color:#cbd5e1;border-radius:8px}
-.main{min-width:0}.topbar{height:70px;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:10}.top-title h2{margin:0;font-size:18px}.top-title span{color:var(--muted);font-size:10px}.top-actions{display:flex;gap:8px;align-items:center}.status{font-size:11px;color:var(--muted)}.status .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:5px}
-.content{padding:28px;max-width:1500px}.page{display:none}.page.active{display:block}.page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:15px;margin-bottom:20px}.page-head h1{margin:0 0 5px;font-size:27px}.page-head p{margin:0;color:var(--muted);font-size:12px}.toolbar,.actions{display:flex;gap:7px;flex-wrap:wrap;align-items:center}.search{width:230px}
-.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-bottom:18px}.kpi,.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}.kpi{padding:17px;display:flex;gap:12px;align-items:center}.kpi-icon{width:40px;height:40px;border-radius:10px;background:var(--blue-soft);color:var(--blue);display:grid;place-items:center;font-weight:800}.kpi label{font-size:10px;color:var(--muted)}.kpi strong{display:block;font-size:21px}.panel{margin-bottom:18px;overflow:hidden}.panel-head{padding:17px 20px;border-bottom:1px solid var(--line)}.panel-head h3{margin:0;font-size:14px}.panel-head p{margin:4px 0 0;font-size:10px;color:var(--muted)}.panel-body{padding:20px}
-.row{padding:14px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:15px;align-items:center}.row:last-child{border-bottom:0}.row-title{font-size:12px;font-weight:700}.meta{font-size:10px;color:var(--muted);margin-top:4px}.badge{display:inline-block;border-radius:999px;padding:4px 8px;font-size:9px;font-weight:800;margin-left:5px}.ok{background:var(--green-soft);color:var(--green)}.warn{background:#fff7e8;color:#a16207}.bad{background:var(--red-soft);color:var(--red)}.vendor{width:38px;height:38px;border-radius:10px;background:var(--blue-soft);color:var(--blue);display:grid;place-items:center;font-weight:800;flex:none}.device-main{display:flex;align-items:center;gap:11px;min-width:0}
-.vendor-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.vendor-card{border:1px solid var(--line);border-radius:12px;padding:15px;display:flex;gap:10px;align-items:center;cursor:pointer}.vendor-card.selected{border:2px solid var(--blue);background:var(--blue-soft)}.vendor-card b{font-size:12px}.vendor-card span{display:block;font-size:9px;color:var(--muted);margin-top:3px}
-.form-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:13px}.form-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:17px}.empty{text-align:center;padding:28px;color:var(--muted);font-size:12px}.path{font:9px ui-monospace,monospace;color:var(--muted);margin-top:4px;word-break:break-all}.error-text{font-size:10px;color:var(--red);margin-top:4px}
-.table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse;font-size:11px}.table th{text-align:left;color:var(--muted);font-size:9px;text-transform:uppercase;padding:11px;border-bottom:1px solid var(--line);white-space:nowrap}.table td{padding:12px 11px;border-bottom:1px solid var(--line);vertical-align:middle}.table tr:last-child td{border-bottom:0}
+/* Sidebar: every colour comes from a --color-sidebar-* token, so it is light
+   in light mode and near-black in dark, like the rest of the platform. It was
+   previously a fixed dark gradient in both themes. */
+.app{min-height:100vh;display:grid;grid-template-columns:236px 1fr}
+.sidebar{background:var(--color-sidebar);color:var(--color-sidebar-text);display:flex;flex-direction:column;min-height:100vh;border-right:1px solid var(--color-sidebar-border)}
+.side-brand{height:70px;padding:0 18px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--color-sidebar-border)}.side-mark{width:36px;height:36px;border-radius:11px;background:var(--color-accent);color:#fff;display:grid;place-items:center;font-weight:800}.side-brand b{display:block;font-size:14px}.side-brand span{display:block;color:var(--color-sidebar-muted);font-size:9px;margin-top:2px;text-transform:uppercase;letter-spacing:.06em}
+.nav{padding:14px 10px}.nav-label{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--color-sidebar-muted);padding:8px}.nav button{display:block;width:100%;border:0;background:transparent;color:var(--color-sidebar-muted);text-align:left;padding:11px 12px;border-radius:9px;margin:2px 0;font-size:12.5px;font-weight:500}.nav button:hover{background:var(--color-sidebar-hover);color:var(--color-sidebar-text)}.nav button.active{background:var(--color-sidebar-active);color:var(--color-sidebar-active-text);font-weight:700;box-shadow:inset 3px 0 var(--color-sidebar-active-text)}
+.side-bottom{margin-top:auto;padding:15px;border-top:1px solid var(--color-sidebar-border)}.user-mini{display:flex;gap:10px;align-items:center}.avatar{width:34px;height:34px;border-radius:10px;background:var(--color-accent);color:#fff;display:grid;place-items:center;font-weight:800;font-size:11px}.user-mini b{display:block;font-size:11px;color:var(--color-sidebar-text)}.user-mini span{display:block;color:var(--color-sidebar-muted);font-size:9px;margin-top:2px}.logout-btn{width:100%;margin-top:12px;height:34px;border:1px solid var(--color-sidebar-border);background:transparent;color:var(--color-sidebar-muted);border-radius:8px}.logout-btn:hover{background:var(--color-sidebar-hover);color:var(--color-sidebar-text)}
+.main{min-width:0}.topbar{height:70px;background:var(--color-surface);border-bottom:1px solid var(--color-border);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:10}.top-title h2{margin:0;font-size:18px}.top-title span{color:var(--color-text-muted);font-size:10px}.top-actions{display:flex;gap:8px;align-items:center}.status{font-size:11px;color:var(--color-text-muted)}.status .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--color-success);margin-right:5px}
+.content{padding:28px;max-width:1500px}.page{display:none}.page.active{display:block}.page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:15px;margin-bottom:20px}.page-head h1{margin:0 0 5px;font-size:27px}.page-head p{margin:0;color:var(--color-text-muted);font-size:12px}.toolbar,.actions{display:flex;gap:7px;flex-wrap:wrap;align-items:center}.search{width:230px}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-bottom:18px}.kpi,.panel{background:var(--color-surface);border:1px solid var(--color-border);border-radius:14px;box-shadow:var(--shadow-md)}.kpi{padding:18px 20px}
+.kpi-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px}
+.kpi-icon{width:36px;height:36px;border-radius:10px;background:var(--color-accent-subtle);color:var(--color-accent);display:grid;place-items:center;font-weight:800;font-size:15px;flex:none}
+.kpi label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--color-text-muted)}
+.kpi strong{display:block;font-family:var(--font-mono);font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
+/* Status tone. Deliberately not .ok/.bad: those are badge classes already, and
+   reusing them here would paint the whole card. */
+.kpi-success .kpi-icon{background:var(--color-success-subtle);color:var(--color-success)}.kpi-success strong{color:var(--color-success)}
+.kpi-danger .kpi-icon{background:var(--color-danger-subtle);color:var(--color-danger)}.kpi-danger strong{color:var(--color-danger)}.panel{margin-bottom:18px;overflow:hidden}.panel-head{padding:17px 20px;border-bottom:1px solid var(--color-border)}.panel-head h3{margin:0;font-size:14px}.panel-head p{margin:4px 0 0;font-size:10px;color:var(--color-text-muted)}.panel-body{padding:20px}
+.row{padding:14px 0;border-bottom:1px solid var(--color-border);display:flex;justify-content:space-between;gap:15px;align-items:center}.row:last-child{border-bottom:0}.row-title{font-size:12px;font-weight:700}.meta{font-size:10px;color:var(--color-text-muted);margin-top:4px}.badge{display:inline-block;border-radius:999px;padding:4px 8px;font-size:9px;font-weight:800;margin-left:5px}.ok{background:var(--color-success-subtle);color:var(--color-success)}.warn{background:var(--color-warning-subtle);color:var(--color-warning)}.bad{background:var(--color-danger-subtle);color:var(--color-danger)}.vendor{width:38px;height:38px;border-radius:10px;background:var(--color-accent-subtle);color:var(--color-accent);display:grid;place-items:center;font-weight:800;flex:none}.device-main{display:flex;align-items:center;gap:11px;min-width:0}
+.vendor-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.vendor-card{border:1px solid var(--color-border);border-radius:12px;padding:15px;display:flex;gap:10px;align-items:center;cursor:pointer}.vendor-card.selected{border:2px solid var(--color-accent);background:var(--color-accent-subtle)}.vendor-card b{font-size:12px}.vendor-card span{display:block;font-size:9px;color:var(--color-text-muted);margin-top:3px}
+.form-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:13px}.form-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:17px}.empty{text-align:center;padding:28px;color:var(--color-text-muted);font-size:12px}.path{font:9px ui-monospace,monospace;color:var(--color-text-muted);margin-top:4px;word-break:break-all}.error-text{font-size:10px;color:var(--color-danger);margin-top:4px}
+.table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse;font-size:11px}.table th{text-align:left;color:var(--color-text-muted);font-size:9px;text-transform:uppercase;padding:11px;border-bottom:1px solid var(--color-border);white-space:nowrap}.table td{padding:12px 11px;border-bottom:1px solid var(--color-border);vertical-align:middle}.table tr:last-child td{border-bottom:0}
 .diff-controls{display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:9px}.diff-box{margin-top:13px;border:1px solid #202a45;border-radius:11px;background:#0b1220;color:#dbeafe;min-height:180px;max-height:560px;overflow:auto;font:12px/1.55 ui-monospace,monospace}.diff-line{padding:2px 12px;white-space:pre-wrap}.diff-line.add{background:#0b3b24;color:#bbf7d0}.diff-line.del{background:#4a1519;color:#fecaca}.diff-line.hunk{background:#12335c;color:#bfdbfe}
-.modal{position:fixed;inset:0;background:rgba(2,6,23,.68);display:flex;align-items:center;justify-content:center;padding:20px;z-index:100}.modal.hidden{display:none}.modal-box{background:var(--surface);border:1px solid var(--line);border-radius:17px;padding:22px;width:min(760px,96vw);max-height:90vh;overflow:auto;box-shadow:0 30px 90px rgba(0,0,0,.35)}.modal-box.wide{width:min(1200px,96vw)}.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:17px}.modal-head h3{margin:0;font-size:18px}.close{width:34px;height:34px;border:0;border-radius:8px;background:var(--surface2);color:var(--text);font-size:20px}.modal-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.check{display:flex!important;align-items:center;gap:8px;margin:13px 0}.check input{width:auto;height:auto}.viewer{background:#0b1220;color:#dbeafe;padding:17px;border-radius:11px;max-height:72vh;overflow:auto;white-space:pre-wrap;font:12px/1.55 monospace}
-.toast-wrap{position:fixed;right:20px;bottom:20px;z-index:200;display:flex;flex-direction:column;gap:8px}.toast{background:#0f172a;color:#fff;padding:12px 15px;border-radius:10px;font-size:12px;box-shadow:0 10px 30px #0004;max-width:380px}.toast.ok{border-left:4px solid #22c55e}.toast.err{border-left:4px solid #ef4444}
+.modal{position:fixed;inset:0;background:rgba(2,6,23,.68);display:flex;align-items:center;justify-content:center;padding:20px;z-index:100}.modal.hidden{display:none}.modal-box{background:var(--color-surface);border:1px solid var(--color-border);border-radius:17px;padding:22px;width:min(760px,96vw);max-height:90vh;overflow:auto;box-shadow:0 30px 90px rgba(0,0,0,.35)}.modal-box.wide{width:min(1200px,96vw)}.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:17px}.modal-head h3{margin:0;font-size:18px}.close{width:34px;height:34px;border:0;border-radius:8px;background:var(--color-surface-sunken);color:var(--color-text);font-size:20px}.modal-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.check{display:flex!important;align-items:center;gap:8px;margin:13px 0}.check input{width:auto;height:auto}.viewer{background:#0b1220;color:#dbeafe;padding:17px;border-radius:11px;max-height:72vh;overflow:auto;white-space:pre-wrap;font:12px/1.55 monospace}
+.toast-wrap{position:fixed;right:20px;bottom:20px;z-index:200;display:flex;flex-direction:column;gap:8px}.toast{background:#0f172a;color:#fff;padding:12px 15px;border-radius:10px;font-size:12px;box-shadow:0 10px 30px #0004;max-width:380px}.toast.ok{border-left:4px solid var(--color-success)}.toast.err{border-left:4px solid var(--color-danger)}
 @media(max-width:1000px){.login{grid-template-columns:1fr}.login-right{display:none}.app{grid-template-columns:72px 1fr}.side-brand b,.side-brand span,.nav-label,.nav button .txt,.side-bottom .user-mini div:last-child,.logout-btn{display:none}.side-brand{justify-content:center}.nav button{text-align:center}.content{padding:20px}.kpis{grid-template-columns:repeat(2,1fr)}.form-grid{grid-template-columns:1fr}.diff-controls{grid-template-columns:1fr}.table{min-width:760px}}
 @media(max-width:650px){.app{display:block}.sidebar{height:auto;min-height:0;position:static}.side-brand,.side-bottom{display:none}.nav{display:flex;overflow:auto;white-space:nowrap;padding:7px}.nav button{width:auto;padding:0 12px}.topbar{padding:0 14px}.content{padding:15px}.page-head{display:block}.toolbar{margin-top:10px}.kpis,.vendor-grid,.modal-grid{grid-template-columns:1fr}.row{align-items:flex-start;flex-direction:column}.actions{flex-wrap:wrap}.search{width:100%}}
 </style>
 </head>
 <body>
 
-<section id="loginScreen" class="login">
+<section id="loginScreen" class="login hidden">
   <div class="login-left"><div class="login-box">
     <div class="logo">N</div>
     <h1>Welcome back</h1><p>Sign in to Network Config Manager</p>
@@ -136,10 +342,10 @@ input:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,9
 <section id="page-dashboard" class="page active">
 <div class="page-head"><div><h1>Dashboard</h1><p>Network configuration management overview.</p></div></div>
 <div class="kpis">
-<div class="kpi"><div class="kpi-icon">D</div><div><label>Total Devices</label><strong id="statDevices">—</strong></div></div>
-<div class="kpi"><div class="kpi-icon">✓</div><div><label>Successful Backups</label><strong id="statBackups">—</strong></div></div>
-<div class="kpi"><div class="kpi-icon">◷</div><div><label>Active Schedules</label><strong id="statSchedules">—</strong></div></div>
-<div class="kpi"><div class="kpi-icon">!</div><div><label>Failed Backups</label><strong id="statFailed">—</strong></div></div>
+<div class="kpi"><div class="kpi-head"><label>Total Devices</label><div class="kpi-icon">D</div></div><strong id="statDevices">—</strong></div>
+<div class="kpi kpi-success"><div class="kpi-head"><label>Successful Backups</label><div class="kpi-icon">✓</div></div><strong id="statBackups">—</strong></div>
+<div class="kpi"><div class="kpi-head"><label>Active Schedules</label><div class="kpi-icon">◷</div></div><strong id="statSchedules">—</strong></div>
+<div class="kpi kpi-danger"><div class="kpi-head"><label>Failed Backups</label><div class="kpi-icon">!</div></div><strong id="statFailed">—</strong></div>
 </div>
 <div class="panel"><div class="panel-head"><h3>Recent Devices</h3><p>Quick access to registered network devices.</p></div><div class="panel-body" id="dashboardDevices"></div></div>
 <div class="panel"><div class="panel-head"><h3>Recent Backups</h3><p>The five most recent configuration backups.</p></div><div class="panel-body" id="dashboardBackups"></div></div>
@@ -329,12 +535,25 @@ function closeUserModal(){$("userModal").classList.add("hidden");editingUserId=n
 async function saveUser(){const p={display_name:$("u_display").value.trim()||null,email:$("u_email").value.trim()||null,role:$("u_role").value,is_active:$("u_active").checked};if(!editingUserId){p.username=$("u_username").value.trim();p.password=$("u_password").value;if(!p.username||p.password.length<8){msg("userResult","Username and password (minimum 8 characters) are required.","error");return}}else if($("u_password").value)p.password=$("u_password").value;try{const url=editingUserId?`/api/users/${editingUserId}`:"/api/users/";const r=await api(url,{method:editingUserId?"PATCH":"POST",body:JSON.stringify(p)}),d=await r.json();if(!r.ok){msg("userResult",d.detail||"Unable to save user","error");return}closeUserModal();toast(editingUserId?"User updated":"User created");await loadUsers()}catch(e){}}
 async function deleteUser(id,name){if(!confirm(`Delete user ${name}?`))return;const r=await api(`/api/users/${id}`,{method:"DELETE"});if(!r.ok){const d=await r.json();toast(d.detail||"Delete failed","err");return}toast("User deleted");await loadUsers()}
 async function loadAudit(){if(!can("audit.view"))return;try{const action=$("auditAction").value,r=await api(`/api/audit/?limit=300${action?"&action="+encodeURIComponent(action):""}`),d=await r.json();if(!r.ok){toast(d.detail||"Unable to load audit logs","err");return}const actions=[...new Set(d.map(x=>x.action))].sort(),sel=$("auditAction"),old=sel.value;sel.innerHTML='<option value="">All actions</option>'+actions.map(a=>`<option value="${esc(a)}">${esc(a)}</option>`).join("");sel.value=old;$("auditTable").innerHTML=d.map(x=>`<tr><td>${esc(fmt(x.created_at))}</td><td><b>${esc(x.username||"system")}</b></td><td>${esc(x.action)}</td><td>${esc((x.resource||"")+" "+(x.resource_id||""))}</td><td><span class="badge ${x.status==="SUCCESS"?"ok":"bad"}">${esc(x.status)}</span></td><td>${esc(x.details||"—")}</td><td>${esc(x.source_ip||"—")}</td></tr>`).join("")||'<tr><td colspan="7" class="empty">No audit events.</td></tr>'}catch(e){}}
-function applyTheme(t){document.documentElement.dataset.theme=t;localStorage.setItem("ncm_theme",t);$("themeBtn").textContent=t==="dark"?"☀ Light":"☾ Dark"}function toggleTheme(){applyTheme(document.documentElement.dataset.theme==="dark"?"light":"dark")}applyTheme(localStorage.getItem("ncm_theme")||"light");
+/* Three theme states, matching the shared standard: an explicit choice, or no
+   choice at all -- in which case data-theme stays unset and the stylesheet's
+   prefers-color-scheme rules follow the operating system. Defaulting to "light"
+   is what made this application ignore a dark-set machine. The theme itself is
+   applied by the inline script in <head>; this only handles the toggle. */
+function systemTheme(){return matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}
+function effectiveTheme(){return document.documentElement.dataset.theme||systemTheme()}
+function syncThemeButton(){$("themeBtn").textContent=effectiveTheme()==="dark"?"☀ Light":"☾ Dark"}
+function applyTheme(t){document.documentElement.dataset.theme=t;localStorage.setItem("ncm_theme",t);syncThemeButton()}
+function toggleTheme(){applyTheme(effectiveTheme()==="dark"?"light":"dark")}
+syncThemeButton();
+/* Track the OS while the page is open, but only while the user has no choice
+   of their own -- once they pick, their choice is the one that stands. */
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){if(!localStorage.getItem("ncm_theme"))syncThemeButton()});
 function csvEscape(v){const s=String(v??"");return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
 function exportCSV(){const headers=["hostname","management_ip","vendor","model","username","ssh_port","site","enabled"],lines=[headers.join(",")];cachedDevices.forEach(d=>lines.push(headers.map(h=>csvEscape(d[h])).join(",")));const blob=new Blob(["\ufeff"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"}),u=URL.createObjectURL(blob),a=document.createElement("a");a.href=u;a.download=`network-devices-${new Date().toISOString().slice(0,10)}.csv`;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(u);toast("Device CSV exported")}
 function downloadCSVTemplate(){const sample="hostname,management_ip,vendor,model,username,password,ssh_port,site,enabled\r\nGENERIC-CORE-R01,192.0.2.10,arista,7280R,operator,CHANGE_ME,22,DEFAULT,true\r\n";const blob=new Blob(["\ufeff"+sample],{type:"text/csv;charset=utf-8"}),u=URL.createObjectURL(blob),a=document.createElement("a");a.href=u;a.download="ncm-device-import-template.csv";document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(u);toast("CSV template downloaded")}
 function parseCSV(text){const rows=[];let row=[],cell="",quoted=false;for(let i=0;i<text.length;i++){const c=text[i],n=text[i+1];if(quoted){if(c=='"'&&n=='"'){cell+='"';i++}else if(c=='"'){quoted=false}else cell+=c}else{if(c=='"')quoted=true;else if(c===","){row.push(cell);cell=""}else if(c==="\n"){row.push(cell.replace(/\r$/,""));rows.push(row);row=[];cell=""}else cell+=c}}if(cell.length||row.length){row.push(cell.replace(/\r$/,""));rows.push(row)}return rows.filter(r=>r.some(x=>String(x).trim()!==""))}
-async function importCSV(e){const file=e.target.files?.[0];e.target.value="";if(!file)return;try{const rows=parseCSV(await file.text());if(rows.length<2){toast("CSV is empty","err");return}const headers=rows[0].map(x=>String(x).trim().toLowerCase()),required=["hostname","management_ip","vendor","username","password"],missing=required.filter(x=>!headers.includes(x));if(missing.length){toast("Missing columns: "+missing.join(", "),"err");return}let success=0,failed=0,errors=[];for(let i=1;i<rows.length;i++){const obj={};headers.forEach((h,j)=>obj[h]=(rows[i][j]??"").trim());const p={hostname:obj.hostname,management_ip:obj.management_ip,vendor:(obj.vendor||"huawei").toLowerCase(),model:obj.model||null,username:obj.username,password:obj.password,ssh_port:parseInt(obj.ssh_port||"22",10),site:obj.site||"DEFAULT",enabled:obj.enabled===""?true:!["false","0","no","disabled"].includes(obj.enabled.toLowerCase())};if(!p.hostname||!p.management_ip||!p.username||!p.password){failed++;errors.push(`Row ${i+1}: required value missing`);continue}try{const r=await api("/api/devices/",{method:"POST",body:JSON.stringify(p)}),d=await r.json();if(r.ok)success++;else{failed++;errors.push(`Row ${i+1}: ${d.detail||"Import failed"}`)}}catch(err){failed++;errors.push(`Row ${i+1}: request failed`)}}await loadAll();$("csvResult").innerHTML=`<b>Import completed</b><p style="margin:8px 0">Successful: <b style="color:var(--green)">${success}</b><br>Failed: <b style="color:var(--red)">${failed}</b></p>${errors.length?`<div style="text-align:left;color:var(--red);font-size:11px">${errors.map(esc).join("<br>")}</div>`:"<div class='message success'>All rows imported successfully.</div>"}`;$("csvModal").classList.remove("hidden")}catch(err){toast("Unable to read CSV file","err")}}
+async function importCSV(e){const file=e.target.files?.[0];e.target.value="";if(!file)return;try{const rows=parseCSV(await file.text());if(rows.length<2){toast("CSV is empty","err");return}const headers=rows[0].map(x=>String(x).trim().toLowerCase()),required=["hostname","management_ip","vendor","username","password"],missing=required.filter(x=>!headers.includes(x));if(missing.length){toast("Missing columns: "+missing.join(", "),"err");return}let success=0,failed=0,errors=[];for(let i=1;i<rows.length;i++){const obj={};headers.forEach((h,j)=>obj[h]=(rows[i][j]??"").trim());const p={hostname:obj.hostname,management_ip:obj.management_ip,vendor:(obj.vendor||"huawei").toLowerCase(),model:obj.model||null,username:obj.username,password:obj.password,ssh_port:parseInt(obj.ssh_port||"22",10),site:obj.site||"DEFAULT",enabled:obj.enabled===""?true:!["false","0","no","disabled"].includes(obj.enabled.toLowerCase())};if(!p.hostname||!p.management_ip||!p.username||!p.password){failed++;errors.push(`Row ${i+1}: required value missing`);continue}try{const r=await api("/api/devices/",{method:"POST",body:JSON.stringify(p)}),d=await r.json();if(r.ok)success++;else{failed++;errors.push(`Row ${i+1}: ${d.detail||"Import failed"}`)}}catch(err){failed++;errors.push(`Row ${i+1}: request failed`)}}await loadAll();$("csvResult").innerHTML=`<b>Import completed</b><p style="margin:8px 0">Successful: <b style="color:var(--color-success)">${success}</b><br>Failed: <b style="color:var(--color-danger)">${failed}</b></p>${errors.length?`<div style="text-align:left;color:var(--color-danger);font-size:11px">${errors.map(esc).join("<br>")}</div>`:"<div class='message success'>All rows imported successfully.</div>"}`;$("csvModal").classList.remove("hidden")}catch(err){toast("Unable to read CSV file","err")}}
 function closeCSVModal(){$("csvModal").classList.add("hidden")}
 document.addEventListener("keydown",e=>{if(e.key==="Escape")["userModal","editModal","viewerModal","scheduleModal","csvModal"].forEach(id=>$(id).classList.add("hidden"))});
 // Single sign-on hands the token back in the fragment: never sent to a server,
@@ -424,7 +643,12 @@ ssoAvailable = __SSO_ENABLED__;
   }
 
   showLogin();
-})();
+})().catch(function (e) {
+  // The form is hidden until something shows it, so a boot failure has to fall
+  // back to it rather than leaving an empty page.
+  console.error("boot failed", e);
+  showLogin();
+});
 </script>
 </body>
 </html>
